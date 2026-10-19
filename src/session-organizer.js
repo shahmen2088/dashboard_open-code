@@ -61,6 +61,7 @@ const paths = {
 }
 
 let dashboardServer = null
+let dashboardReload = null
 
 function now() {
   return new Date().toISOString()
@@ -336,7 +337,7 @@ function enhanceDashboardViews(page) {
   function renderTech(){document.getElementById("alt-tech").innerHTML="<div class=tech-grid><div class=tech-card><span>Режим</span><strong>Только чтение</strong><small>Исходные чаты не изменяются</small></div><div class=tech-card><span>Индекс</span><strong>"+DATA.counts.sessions+" чатов</strong><small>Обновлён "+esc(date(new Date(DATA.generatedAt).getTime()))+"</small></div><div class=tech-card><span>Автообновление</span><strong>5 секунд</strong><small>Dashboard проверяет новый снимок</small></div></div>"}
   function safeRender(fn,id){try{fn()}catch(error){const node=document.getElementById(id);if(node)node.innerHTML="<div class=alt-empty>Представление временно недоступно: "+esc(error&&error.message||error)+"</div>";console.error(error)}}function renderViews(){safeRender(renderTable,"alt-table");safeRender(renderBoard,"alt-board");safeRender(renderTimeline,"alt-timeline");safeRender(renderGraph,"alt-graph");safeRender(renderTech,"alt-tech")};const oldRows=window.renderRows;window.renderRows=function(){if(typeof oldRows==="function")oldRows();renderViews()};
   function setView(view){localStorage.setItem("opencode-dashboard-view",view);document.querySelectorAll("[data-view-panel]").forEach(panel=>panel.hidden=panel.dataset.viewPanel!==view);document.querySelectorAll(".view-tab").forEach(tab=>{const active=tab.dataset.view===view;tab.classList.toggle("view-tab--active",active);tab.setAttribute("aria-selected",String(active))})}
-  document.querySelectorAll(".view-tab").forEach(tab=>tab.onclick=()=>setView(tab.dataset.view));setView(localStorage.getItem("opencode-dashboard-view")||"map");renderViews();
+  document.querySelectorAll(".view-tab").forEach(tab=>tab.onclick=()=>setView(tab.dataset.view));setView(localStorage.getItem("opencode-dashboard-view")||"map");renderViews();const refreshButton=document.getElementById("refresh");if(refreshButton)refreshButton.onclick=()=>fetch("/api/reload",{method:"POST"}).then(response=>response.ok?response.json():null).then(()=>location.reload()).catch(()=>location.reload());
 })();
 </script>`;return page.replace("</script></body>","</script>"+script+"</body>")
 }
@@ -421,6 +422,11 @@ async function startDashboardServer() {
     const send = (status, type, body) => { response.writeHead(status, { "content-type": type, "cache-control": "no-store" }); response.end(body) }
     if (request.url === "/api/report") {
       try { send(200, "application/json; charset=utf-8", await readFile(AUDIT_JSON, "utf8")) } catch { send(404, "application/json; charset=utf-8", JSON.stringify({ error: "Audit has not been generated yet" })) }
+      return
+    }
+    if (request.url === "/api/reload" && (request.method === "GET" || request.method === "POST")) {
+      if (!dashboardReload) { send(503, "application/json; charset=utf-8", JSON.stringify({ error: "Dashboard reload is not ready" })); return }
+      try { send(200, "application/json; charset=utf-8", JSON.stringify(await dashboardReload())) } catch (error) { send(500, "application/json; charset=utf-8", JSON.stringify({ error: safeError(error) })) }
       return
     }
     if (request.url === "/" || request.url === "/index.html") {
@@ -573,9 +579,10 @@ async function diagnose(client) {
 
 export const SessionOrganizer = async ({ client, directory }) => {
   await ensureStorage()
-  await startDashboardServer()
   let operation = Promise.resolve()
   const enqueue = (work) => { operation = operation.then(work, work); return operation }
+  dashboardReload = () => enqueue(() => runAudit(client, directory))
+  await startDashboardServer()
   void enqueue(() => runAudit(client, directory)).catch(() => undefined)
   let refreshTimer = null
   const scheduleRefresh = async () => {
@@ -589,6 +596,11 @@ export const SessionOrganizer = async ({ client, directory }) => {
       description: "Generate a full local read-only audit of OpenCode V1 sessions and refresh the dashboard.",
       args: { refresh: defineTool.schema.boolean().optional() },
       async execute() { const result = await enqueue(() => runAudit(client, directory)); return { title: "Session Organizer audit", output: JSON.stringify(result, null, 2), metadata: result } },
+    }),
+    session_organizer_dashboard_reload: defineTool({
+      description: "Regenerate the local dashboard and report without restarting OpenCode. This refreshes data using the currently loaded plugin code.",
+      args: {},
+      async execute() { const result = await enqueue(() => runAudit(client, directory)); return { title: "Session Organizer dashboard reload", output: JSON.stringify(result, null, 2), metadata: result } },
     }),
     session_organizer_status: defineTool({
       description: "Show local Session Organizer paths, settings, and indexed session count.",
