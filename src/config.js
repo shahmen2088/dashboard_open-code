@@ -11,6 +11,8 @@ export const AUDIT_JSON = join(REPORTS, "audit-latest.json")
 export const AUDIT_CSV = join(REPORTS, "audit-latest.csv")
 export const SUMMARY_FILE = join(REPORTS, "summary.md")
 export const DASHBOARD_HTML = join(REPORTS, "dashboard.html")
+export const USAGE_LEDGER = join(STORE, "usage-ledger.jsonl")
+export const USAGE_INDEX = join(STORE, "usage-index.json")
 
 export const DEFAULT_SETTINGS = {
   schemaVersion: 1,
@@ -39,6 +41,8 @@ export const paths = {
   dashboardUrl: null,
   summary: SUMMARY_FILE,
   backups: BACKUPS,
+  usageLedger: USAGE_LEDGER,
+  usageIndex: USAGE_INDEX,
 }
 
 export const GENERIC_TITLE = /^(new session|session(?:\s+\d+)?|untitled(?:\s+session)?|opencode session)$/i

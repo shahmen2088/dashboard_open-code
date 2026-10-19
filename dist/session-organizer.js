@@ -14,6 +14,8 @@ var AUDIT_JSON = join(REPORTS, "audit-latest.json");
 var AUDIT_CSV = join(REPORTS, "audit-latest.csv");
 var SUMMARY_FILE = join(REPORTS, "summary.md");
 var DASHBOARD_HTML = join(REPORTS, "dashboard.html");
+var USAGE_LEDGER = join(STORE, "usage-ledger.jsonl");
+var USAGE_INDEX = join(STORE, "usage-index.json");
 var DEFAULT_SETTINGS = {
   schemaVersion: 1,
   autoRename: false,
@@ -39,7 +41,9 @@ var paths = {
   dashboard: DASHBOARD_HTML,
   dashboardUrl: null,
   summary: SUMMARY_FILE,
-  backups: BACKUPS
+  backups: BACKUPS,
+  usageLedger: USAGE_LEDGER,
+  usageIndex: USAGE_INDEX
 };
 var GENERIC_TITLE = /^(new session|session(?:\s+\d+)?|untitled(?:\s+session)?|opencode session)$/i;
 
@@ -65,6 +69,7 @@ async function ensureStorage() {
   await mkdir(REPORTS, { recursive: true });
   await mkdir(BACKUPS, { recursive: true });
   await appendFile(ACTIONS_FILE, "", { encoding: "utf8", flag: "a" });
+  await appendFile(USAGE_LEDGER, "", { encoding: "utf8", flag: "a" });
 }
 async function loadSettings() {
   const current = await readJson(SETTINGS_FILE, {});
@@ -115,8 +120,131 @@ function boundedText(value, budget, limit) {
 }
 
 // src/server.js
-import { readFile as readFile2 } from "node:fs/promises";
+import { readFile as readFile3 } from "node:fs/promises";
 import { createServer } from "node:http";
+
+// src/usage/aggregate.js
+function dayInTimezone(value, timezone) {
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(value));
+  } catch {
+    return String(value || "").slice(0, 10);
+  }
+}
+function inRange(record, from, to) {
+  const value = new Date(record.completedAt || record.capturedAt || 0).getTime();
+  return (!from || value >= new Date(from).getTime()) && (!to || value <= new Date(to).getTime());
+}
+function matchesFilters(record, options) {
+  return (!options.projectId || record.projectId === options.projectId) && (!options.sessionId || record.sessionId === options.sessionId) && (!options.providerId || record.providerId === options.providerId) && (!options.modelId || record.modelId === options.modelId);
+}
+function aggregateUsage(records, { from, to, timezone = "Europe/Moscow", groupBy = "day", projectId, sessionId, providerId, modelId } = {}) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const record of records) {
+    if (!inRange(record, from, to) || !matchesFilters(record, { projectId, sessionId, providerId, modelId })) continue;
+    const key = groupBy === "project" ? record.projectId || record.projectDirectory || "unknown" : groupBy === "session" ? record.sessionId : groupBy === "provider" ? record.providerId || "unknown" : groupBy === "model" ? `${record.providerId || "unknown"}/${record.modelId || "unknown"}` : dayInTimezone(record.completedAt || record.capturedAt, timezone);
+    if (!groups.has(key)) groups.set(key, { key, records: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0, unknownCost: 0 });
+    const target = groups.get(key);
+    target.records += 1;
+    for (const field of ["input", "output", "reasoning", "cacheRead", "cacheWrite", "total"]) target[field] += Number(record.tokens?.[field]) || 0;
+    if (record.cost === null || record.cost === void 0) target.unknownCost += 1;
+    else target.cost += Number(record.cost) || 0;
+  }
+  return [...groups.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
+function usageCsv(rows) {
+  const header = ["key", "records", "input", "output", "reasoning", "cacheRead", "cacheWrite", "total", "cost", "unknownCost"];
+  return `${[header, ...rows.map((row) => header.map((field) => row[field]))].map((line) => line.map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(",")).join("\n")}
+`;
+}
+
+// src/usage/ledger.js
+import { appendFile as appendFile2, readFile as readFile2 } from "node:fs/promises";
+function sameRecord(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+function parseLedger(text) {
+  const records = /* @__PURE__ */ new Map();
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const record = JSON.parse(line);
+      if (record?.usageId) records.set(record.usageId, record);
+    } catch {
+    }
+  }
+  return records;
+}
+async function loadUsageRecords() {
+  await ensureStorage();
+  return parseLedger(await readFile2(USAGE_LEDGER, "utf8"));
+}
+function totals(records) {
+  const result = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0, costKnown: 0, costUnknown: 0, generations: 0 };
+  for (const record of records) {
+    for (const key of ["input", "output", "reasoning", "cacheRead", "cacheWrite", "total"]) result[key] += Number(record.tokens?.[key]) || 0;
+    result.generations += 1;
+    if (record.cost === null || record.cost === void 0) result.costUnknown += 1;
+    else {
+      result.cost += Number(record.cost) || 0;
+      result.costKnown += 1;
+    }
+  }
+  return result;
+}
+function buildUsageIndex(records, rebuiltAt = (/* @__PURE__ */ new Date()).toISOString()) {
+  const values = [...records.values()];
+  const byDay = /* @__PURE__ */ new Map();
+  const byProject = /* @__PURE__ */ new Map();
+  const bySession = /* @__PURE__ */ new Map();
+  const byModel = /* @__PURE__ */ new Map();
+  for (const record of values) {
+    const day = String(record.completedAt || record.capturedAt || "").slice(0, 10) || "unknown";
+    const groups = [[byDay, day], [byProject, record.projectId || record.projectDirectory || "unknown"], [bySession, record.sessionId], [byModel, `${record.providerId || "unknown"}/${record.modelId || "unknown"}`]];
+    for (const [map, key] of groups) {
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(record);
+    }
+  }
+  const grouped = (map) => Object.fromEntries([...map.entries()].map(([key, items]) => [key, totals(items)]));
+  return {
+    schemaVersion: 2,
+    lastRebuiltAt: rebuiltAt,
+    records: values.length,
+    minTimestamp: values.map((item) => item.completedAt || item.capturedAt).filter(Boolean).sort()[0] || null,
+    maxTimestamp: values.map((item) => item.completedAt || item.capturedAt).filter(Boolean).sort().at(-1) || null,
+    totals: totals(values),
+    byDay: grouped(byDay),
+    byProject: grouped(byProject),
+    bySession: grouped(bySession),
+    byModel: grouped(byModel)
+  };
+}
+async function upsertUsage(records) {
+  if (!records.length) return { records: 0, added: 0, updated: 0 };
+  const current = await loadUsageRecords();
+  const changes = [];
+  let updated = 0;
+  for (const record of records) {
+    const previous = current.get(record.usageId);
+    if (previous && sameRecord(previous, record)) continue;
+    current.set(record.usageId, record);
+    changes.push(JSON.stringify(record));
+    if (previous) updated += 1;
+  }
+  if (changes.length) await appendFile2(USAGE_LEDGER, `${changes.join("\n")}
+`, "utf8");
+  const index = buildUsageIndex(current);
+  await writeJson(USAGE_INDEX, index);
+  return { records: current.size, added: changes.length - updated, updated };
+}
+async function loadUsageIndex() {
+  const current = await readJson(USAGE_INDEX, null);
+  if (current?.schemaVersion === 2) return current;
+  return buildUsageIndex(await loadUsageRecords());
+}
+
+// src/server.js
 var dashboardServer = null;
 async function startDashboardServer() {
   if (dashboardServer) return;
@@ -125,17 +253,41 @@ async function startDashboardServer() {
       response.writeHead(status, { "content-type": type, "cache-control": "no-store" });
       response.end(body);
     };
-    if (request.url === "/api/report") {
+    const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (url.pathname === "/api/report") {
       try {
-        send(200, "application/json; charset=utf-8", await readFile2(AUDIT_JSON, "utf8"));
+        send(200, "application/json; charset=utf-8", await readFile3(AUDIT_JSON, "utf8"));
       } catch {
         send(404, "application/json; charset=utf-8", JSON.stringify({ error: "Audit has not been generated yet" }));
       }
       return;
     }
-    if (request.url === "/" || request.url === "/index.html") {
+    if (url.pathname === "/api/usage" || url.pathname === "/api/usage/export.csv") {
       try {
-        send(200, "text/html; charset=utf-8", await readFile2(DASHBOARD_HTML, "utf8"));
+        const groupBy = ["day", "project", "session", "provider", "model"].includes(url.searchParams.get("groupBy")) ? url.searchParams.get("groupBy") : "day";
+        const rows = aggregateUsage([...await loadUsageRecords().then((records) => records.values())], {
+          from: url.searchParams.get("from") || void 0,
+          to: url.searchParams.get("to") || void 0,
+          timezone: url.searchParams.get("timezone") || "Europe/Moscow",
+          groupBy,
+          projectId: url.searchParams.get("projectId") || void 0,
+          sessionId: url.searchParams.get("sessionId") || void 0,
+          providerId: url.searchParams.get("providerId") || void 0,
+          modelId: url.searchParams.get("modelId") || void 0
+        });
+        if (url.pathname.endsWith(".csv")) {
+          send(200, "text/csv; charset=utf-8", usageCsv(rows));
+          return;
+        }
+        send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: { rows, index: await loadUsageIndex() }, error: null, meta: { generatedAt: (/* @__PURE__ */ new Date()).toISOString(), schemaVersion: 2 } }));
+      } catch (error) {
+        send(500, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: "USAGE_READ_FAILED", message: String(error?.message || error) }, meta: { schemaVersion: 2 } }));
+      }
+      return;
+    }
+    if (url.pathname === "/" || url.pathname === "/index.html") {
+      try {
+        send(200, "text/html; charset=utf-8", await readFile3(DASHBOARD_HTML, "utf8"));
       } catch {
         send(404, "text/plain; charset=utf-8", "Dashboard is not generated yet");
       }
@@ -170,7 +322,7 @@ async function call(label, operation, errors) {
 }
 
 // src/core/pipeline.js
-import { appendFile as appendFile2 } from "node:fs/promises";
+import { appendFile as appendFile3 } from "node:fs/promises";
 import { resolve as resolve3 } from "node:path";
 
 // src/classification.js
@@ -297,6 +449,85 @@ function projectGroups(index) {
   return [...groups.values()].sort((a, b) => a.projectDirectory.localeCompare(b.projectDirectory));
 }
 
+// src/usage/extract.js
+function numberOrNull(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+function tokenValue(tokens, ...keys) {
+  for (const key of keys) {
+    const value = numberOrNull(tokens?.[key]);
+    if (value !== null) return value;
+  }
+  return 0;
+}
+function normalizeTokens(tokens = {}) {
+  const cache = tokens.cache || {};
+  const result = {
+    input: tokenValue(tokens, "input", "prompt"),
+    output: tokenValue(tokens, "output", "completion"),
+    reasoning: tokenValue(tokens, "reasoning", "reasoningTokens"),
+    cacheRead: tokenValue(tokens, "cacheRead", "cache_read", "cachedInput") || tokenValue(cache, "read"),
+    cacheWrite: tokenValue(tokens, "cacheWrite", "cache_write") || tokenValue(cache, "write")
+  };
+  result.total = tokenValue(tokens, "total") || Object.values(result).reduce((sum, value) => sum + value, 0);
+  return result;
+}
+function hasUsage(value) {
+  return Boolean(value && typeof value === "object" && (value.tokens || value.usage || value.cost !== void 0));
+}
+function usageSource(value) {
+  return value?.usage && typeof value.usage === "object" ? value.usage : value || {};
+}
+function mergeParts(parts) {
+  const candidates = (Array.isArray(parts) ? parts : []).filter((part) => part?.type === "step-finish" && hasUsage(part));
+  if (!candidates.length) return null;
+  const merged = { tokens: {}, cost: null, providerID: null, modelID: null, variant: null };
+  for (const part of candidates) {
+    const source = usageSource(part);
+    const tokens = normalizeTokens(source.tokens || source);
+    for (const key of ["input", "output", "reasoning", "cacheRead", "cacheWrite", "total"]) merged.tokens[key] = (merged.tokens[key] || 0) + tokens[key];
+    if (numberOrNull(source.cost) !== null) merged.cost = (merged.cost || 0) + source.cost;
+    merged.providerID ||= source.providerID || source.providerId || null;
+    merged.modelID ||= source.modelID || source.modelId || null;
+    merged.variant ||= source.variant || null;
+  }
+  return merged;
+}
+function extractUsage(message, session, capturedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+  const info = message?.info || message;
+  if (!info || info.role !== "assistant") return null;
+  const messageId = info.id || message?.id;
+  if (!messageId) return null;
+  const direct = hasUsage(info) ? usageSource(info) : null;
+  const fallback = direct ? null : mergeParts(message?.parts);
+  const source = direct || fallback;
+  if (!source) return null;
+  const tokens = normalizeTokens(source.tokens || source);
+  const reportedCost = numberOrNull(source.cost);
+  const cost = reportedCost !== null && reportedCost > 0 ? reportedCost : null;
+  return {
+    schemaVersion: 2,
+    usageId: `${session.id}:${messageId}`,
+    capturedAt,
+    completedAt: info.time?.completed || info.completedAt || null,
+    projectId: session.projectId || null,
+    projectDirectory: session.projectDirectory || session.directory || null,
+    sessionId: session.id,
+    messageId,
+    providerId: source.providerID || source.providerId || info.providerID || info.providerId || null,
+    modelId: source.modelID || source.modelId || info.modelID || info.modelId || null,
+    variant: source.variant || info.variant || null,
+    tokens,
+    cost,
+    currency: "USD",
+    costSource: cost === null ? "unknown" : "reported_by_opencode",
+    status: "complete"
+  };
+}
+function extractMessageUsage(messages, session, capturedAt) {
+  return (Array.isArray(messages) ? messages : []).map((message) => extractUsage(message, session, capturedAt)).filter(Boolean);
+}
+
 // src/core/pipeline.js
 function now() {
   return (/* @__PURE__ */ new Date()).toISOString();
@@ -316,6 +547,7 @@ async function runAudit(client, currentDirectory, { writeReports: writeReports3 
   }
   const sessions = await collectTree(client, roots, errors);
   const statuses = {};
+  const usageRecords = [];
   for (const directory of [...new Set(sessions.map((item) => item.directory).filter(Boolean).map((item) => resolve3(item)))]) {
     const result = await call(`client.session.status:${directory}`, () => client.session.status({ query: { directory } }), errors);
     if (result && typeof result === "object") Object.assign(statuses, result);
@@ -323,15 +555,17 @@ async function runAudit(client, currentDirectory, { writeReports: writeReports3 
   const records = {};
   for (const session of sessions) {
     const messages = await call(`client.session.messages:${session.id}`, () => client.session.messages({ path: { id: session.id }, query: { directory: session.directory, limit: settings.messagesLimit } }), errors);
-    records[session.id] = await buildRecord(session, Array.isArray(messages) ? messages : [], statuses, projects, previous.sessions, settings);
+    const safeMessages = Array.isArray(messages) ? messages : [];
+    records[session.id] = await buildRecord(session, safeMessages, statuses, projects, previous.sessions, settings);
+    usageRecords.push(...extractMessageUsage(safeMessages, { ...session, projectId: records[session.id].projectId, projectDirectory: records[session.id].projectDirectory }, now()));
   }
   updateDuplicates(records);
   const index = { schemaVersion: 1, protocol: "v1", updatedAt: now(), projects: projects.filter((item) => item?.worktree).map((item) => ({ id: item.id || null, worktree: resolve3(item.worktree), vcs: item.vcs || null })), sessions: records };
   await writeJson(INDEX_FILE, index);
   const report = await writeReports3(index, settings, errors);
-  await appendFile2(ACTIONS_FILE, `${JSON.stringify({ at: now(), action: "audit", mode: "full-dry-run", counts: report.counts, errors: errors.length })}
+  await appendFile3(ACTIONS_FILE, `${JSON.stringify({ at: now(), action: "audit", mode: "full-dry-run", counts: report.counts, errors: errors.length })}
 `, "utf8");
-  return { ...report.counts, errors, paths };
+  return { ...report.counts, usage: await upsertUsage(usageRecords), errors, paths };
 }
 
 // src/reports.js
@@ -378,7 +612,7 @@ ${groupsText}
 import { tool as defineTool } from "@opencode-ai/plugin";
 
 // src/actions.js
-import { appendFile as appendFile3 } from "node:fs/promises";
+import { appendFile as appendFile4 } from "node:fs/promises";
 import { join as join2, relative as relative2, resolve as resolve4 } from "node:path";
 function now2() {
   return (/* @__PURE__ */ new Date()).toISOString();
@@ -425,7 +659,7 @@ async function applyRenames(client, currentDirectory, args, writeReports3) {
       record.currentTitle = sanitize(updated?.title || record.proposedTitle, 160);
       record.manualTitlePreservation = false;
       results.push({ id: record.id, result: "renamed", title: record.currentTitle, backup });
-      await appendFile3(ACTIONS_FILE, `${JSON.stringify({ at: now2(), action: "rename", id: record.id, backup })}
+      await appendFile4(ACTIONS_FILE, `${JSON.stringify({ at: now2(), action: "rename", id: record.id, backup })}
 `, "utf8");
     } catch (error) {
       results.push({ id: record.id, result: "failed", error: safeError(error), backup });
@@ -462,7 +696,7 @@ async function undoRenames(client, currentDirectory, args, writeReports3) {
         index.sessions[before.id].proposedTitle = before.currentTitle;
       }
       results.push({ file, id: before.id, result: "restored", title: before.currentTitle });
-      await appendFile3(ACTIONS_FILE, `${JSON.stringify({ at: now2(), action: "undo-rename", id: before.id, backup: file })}
+      await appendFile4(ACTIONS_FILE, `${JSON.stringify({ at: now2(), action: "undo-rename", id: before.id, backup: file })}
 `, "utf8");
     } catch (error) {
       results.push({ file, id: before.id, result: "failed", error: safeError(error) });

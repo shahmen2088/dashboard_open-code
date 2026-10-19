@@ -1,5 +1,5 @@
 import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises"
-import { ACTIONS_FILE, BACKUPS, DEFAULT_SETTINGS, INDEX_FILE, REPORTS, SETTINGS_FILE } from "./config.js"
+import { ACTIONS_FILE, BACKUPS, DEFAULT_SETTINGS, INDEX_FILE, REPORTS, SETTINGS_FILE, USAGE_LEDGER } from "./config.js"
 
 export function json(value) {
   return `${JSON.stringify(value, null, 2)}\n`
@@ -23,6 +23,7 @@ export async function ensureStorage() {
   await mkdir(REPORTS, { recursive: true })
   await mkdir(BACKUPS, { recursive: true })
   await appendFile(ACTIONS_FILE, "", { encoding: "utf8", flag: "a" })
+  await appendFile(USAGE_LEDGER, "", { encoding: "utf8", flag: "a" })
 }
 
 export async function loadSettings() {

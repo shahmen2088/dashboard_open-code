@@ -6,6 +6,7 @@ Reusable OpenCode V1 plugin that builds a local, read-only index and dashboard f
 
 - Reads projects, sessions, child sessions, statuses, and limited message previews through the official OpenCode SDK.
 - Generates a searchable local dashboard organized as projects and chats, with topic, status, duplicate, archive, and preview information.
+- Extracts assistant token usage and reported cost into a deduplicated local ledger; missing cost is shown as unknown, never as a false zero.
 - Refreshes after session events arrive with a short debounce and polls the dashboard endpoint every five seconds.
 - Keeps all data local and redacts common secrets before storing excerpts.
 - Never accesses `opencode.db` directly.
@@ -65,6 +66,8 @@ The generated files are intentionally ignored by Git:
 - `reports/audit-latest.json` - structured report;
 - `reports/dashboard.html` - generated dashboard;
 - `actions.log` - short local audit entries;
+- `usage-ledger.jsonl` - normalized assistant usage records without message text;
+- `usage-index.json` - materialized usage totals for local API reads;
 - `backups/` - local backups for explicit settings changes.
 
 ## Safety Model
@@ -89,6 +92,11 @@ Use `ignoredSessionIds` and `ignoredProjectDirectories` to exclude local records
 - `session_organizer_override` - save local metadata after `confirm=true`;
 - `session_organizer_apply` - rename selected records only after `confirm=true`;
 - `session_organizer_undo` - restore titles from explicit backup files after `confirm=true`.
+
+Read-only usage API:
+
+- `GET /api/usage?groupBy=day|project|session|provider|model` - local aggregates;
+- `GET /api/usage/export.csv` - aggregate CSV without message text.
 
 ## Development
 
