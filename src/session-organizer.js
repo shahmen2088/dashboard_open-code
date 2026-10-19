@@ -172,6 +172,7 @@ function projectFor(directory, projects) {
     .sort((a, b) => b.worktree.length - a.worktree.length)
   if (!matches.length) return { id: null, directory: target, match: "unmatched" }
   const selected = matches[0]
+  if (selected.project.id === "global") return { id: null, directory: target, match: "exact" }
   return {
     id: selected.project.id || null,
     directory: selected.worktree,
