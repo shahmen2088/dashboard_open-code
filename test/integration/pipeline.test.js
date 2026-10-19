@@ -18,7 +18,7 @@ test("audit pipeline indexes a root session and its message preview", async () =
         list: async () => [session],
         children: async () => [],
         status: async () => ({ [session.id]: { type: "idle" } }),
-        messages: async () => [{ info: { role: "user" }, parts: [{ type: "text", text: "Implement a fixture" }] }],
+        messages: async () => [{ info: { role: "user" }, parts: [{ type: "text", text: "Implement a dashboard function" }] }],
       },
     }
     let writtenIndex
@@ -31,7 +31,7 @@ test("audit pipeline indexes a root session and its message preview", async () =
     assert.equal(result.sessions, 1)
     assert.equal(writtenIndex.sessions.ses_fixture.topic, "code")
     const stored = JSON.parse(await readFile(join(store, "index.json"), "utf8"))
-    assert.equal(stored.sessions.ses_fixture.shortSummary, "Implement a fixture")
+    assert.equal(stored.sessions.ses_fixture.shortSummary, "Implement a dashboard function")
   } finally {
     if (previousStore === undefined) delete process.env.OPENCODE_SESSION_ORGANIZER_HOME
     else process.env.OPENCODE_SESSION_ORGANIZER_HOME = previousStore
