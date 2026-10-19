@@ -40,6 +40,8 @@ Restart OpenCode after installation and run the `session_organizer_audit` tool. 
 
 The dashboard searches chat title, chat description, project path, and chat ID. Select a project first when working with a large workspace. Each chat detail panel shows a Windows command and a macOS/Linux command in the form `opencode -s <chat-id>`, plus the exact project directory and step-by-step instructions for opening the chat.
 
+The same index is available through six local views: `Карта`, `Таблица`, `Канбан`, `Хронология`, `Связи`, and `Техника`. The selected view is stored only in browser `localStorage`; switching views does not modify sessions or projects.
+
 ## Local Storage
 
 Default storage:
