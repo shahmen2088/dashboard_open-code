@@ -13,6 +13,16 @@ import { readJournal } from "./journal.js"
 
 let dashboardServer = null
 
+function validateSettingsPatch(patch) {
+  if (patch.security?.requireRequestToken === false) throw Object.assign(new Error("Request token protection cannot be disabled"), { code: "INVALID_SETTINGS" })
+  for (const key of ["daily", "weekly", "monthly"]) {
+    const value = patch.budgets?.[key]
+    if (value !== undefined && value !== null && (typeof value !== "number" || !Number.isFinite(value) || value < 0)) throw Object.assign(new Error(`Invalid ${key} budget`), { code: "INVALID_SETTINGS" })
+  }
+  if (patch.budgets?.warningThresholds !== undefined && (!Array.isArray(patch.budgets.warningThresholds) || patch.budgets.warningThresholds.some((value) => typeof value !== "number" || value < 0 || value > 1))) throw Object.assign(new Error("Invalid warning thresholds"), { code: "INVALID_SETTINGS" })
+  if (patch.usage?.retentionDays !== undefined && (!Number.isInteger(patch.usage.retentionDays) || patch.usage.retentionDays < 1)) throw Object.assign(new Error("Invalid retentionDays"), { code: "INVALID_SETTINGS" })
+}
+
 export async function startDashboardServer(client) {
   if (dashboardServer) return
   const server = createServer(async (request, response) => {
@@ -39,6 +49,7 @@ export async function startDashboardServer(client) {
         const patch = await readJsonBody(request)
         const allowed = ["dashboard", "usage", "budgets", "modelSwitching", "security"]
         if (!patch || Object.keys(patch).some((key) => !allowed.includes(key))) throw Object.assign(new Error("Only supported settings sections may be changed"), { code: "INVALID_SETTINGS" })
+        validateSettingsPatch(patch)
         const current = await loadSettings()
         const next = { ...current }
         for (const key of allowed) if (patch[key] !== undefined) next[key] = { ...current[key], ...patch[key] }
@@ -113,4 +124,11 @@ export async function startDashboardServer(client) {
   dashboardServer = server
   const address = server.address()
   paths.dashboardUrl = address && typeof address === "object" ? `http://127.0.0.1:${address.port}/` : null
+}
+
+export async function stopDashboardServer() {
+  if (!dashboardServer) return
+  await new Promise((resolveClose) => dashboardServer.close(resolveClose))
+  dashboardServer = null
+  paths.dashboardUrl = null
 }
