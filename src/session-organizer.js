@@ -1,11 +1,12 @@
-import { appendFile, writeFile } from "node:fs/promises"
-import { join, relative, resolve } from "node:path"
-import { tool as defineTool } from "@opencode-ai/plugin"
-import { ACTIONS_FILE, AUDIT_CSV, AUDIT_JSON, BACKUPS, DASHBOARD_HTML, INDEX_FILE, paths, REPORTS, SETTINGS_FILE, SUMMARY_FILE } from "./config.js"
-import { ensureStorage, loadIndex, loadSettings, readJson, writeJson } from "./storage.js"
+import { writeFile } from "node:fs/promises"
+import { DASHBOARD_HTML, paths } from "./config.js"
+import { ensureStorage, loadIndex, loadSettings } from "./storage.js"
 import { safeError, sanitize } from "./text.js"
 import { startDashboardServer } from "./server.js"
-import { buildRecord, call, collectTree, projectGroups, responseData, updateDuplicates } from "./core/audit.js"
+import { call } from "./core/audit.js"
+import { runAudit } from "./core/pipeline.js"
+import { writeReports as writeReportFiles } from "./reports.js"
+import { createTools } from "./tools.js"
 
 function now() {
   return new Date().toISOString()
@@ -93,155 +94,7 @@ function render(){renderStats();renderProjects();renderRows()}["search","topic",
 }
 
 async function writeReports(index, settings, errors = []) {
-  const sessions = Object.values(index.sessions)
-  const groups = projectGroups(index)
-  const counts = {
-    sessions: sessions.length,
-    projects: groups.length,
-    manualTitles: sessions.filter((item) => item.manualTitlePreservation).length,
-    ignored: sessions.filter((item) => item.ignored).length,
-    renameCandidates: sessions.filter((item) => !item.manualTitlePreservation && !item.ignored).length,
-    duplicateLinks: sessions.reduce((sum, item) => sum + item.duplicateCandidateIds.length, 0),
-  }
-  const report = { generatedAt: now(), dryRun: true, protocol: "v1", noDatabaseAccess: true, noExternalCalls: true, noMoveOrDelete: true, counts, groups, sessions, errors, paths }
-  await writeJson(AUDIT_JSON, report)
-  await writeDashboard(report)
-  const header = ["id", "projectDirectory", "directory", "topic", "currentTitle", "proposedTitle", "status", "manualTitlePreservation", "actionPlan"]
-  const csv = [header, ...sessions.map((item) => [item.id, item.projectDirectory, item.directory, item.topic, item.currentTitle, item.proposedTitle, item.status?.type, item.manualTitlePreservation, item.actionPlan])]
-    .map((row) => row.map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(","))
-    .join("\n")
-  await writeFile(AUDIT_CSV, `${csv}\n`, "utf8")
-  const groupsText = groups.map((group) => `- ${group.projectDirectory}: ${group.total} sessions`).join("\n") || "- No sessions found"
-  await writeFile(SUMMARY_FILE, `# Session Organizer audit\n\nGenerated: ${report.generatedAt}\n\n- Sessions: ${counts.sessions}\n- Projects: ${counts.projects}\n- Manual titles preserved: ${counts.manualTitles}\n- Rename candidates: ${counts.renameCandidates}\n- Duplicate links: ${counts.duplicateLinks}\n- Database access: never\n- Moves/deletes: never\n\n## Projects\n${groupsText}\n`, "utf8")
-  return report
-}
-
-async function getProjects(client, errors) {
-  const result = await call("client.project.list", () => client.project.list(), errors)
-  return Array.isArray(result) ? result : []
-}
-
-async function runAudit(client, currentDirectory) {
-  await ensureStorage()
-  const settings = await loadSettings()
-  const previous = await loadIndex()
-  const errors = []
-  const projects = await getProjects(client, errors)
-  const directories = [...new Set([currentDirectory, ...projects.map((item) => item?.worktree)].filter(Boolean).map((item) => resolve(item)))]
-  const roots = []
-  for (const directory of directories) {
-    const sessions = await call(`client.session.list:${directory}`, () => client.session.list({ query: { directory } }), errors)
-    if (Array.isArray(sessions)) roots.push(...sessions)
-  }
-  const sessions = await collectTree(client, roots, errors)
-  const statuses = {}
-  for (const directory of [...new Set(sessions.map((item) => item.directory).filter(Boolean).map((item) => resolve(item)))]) {
-    const result = await call(`client.session.status:${directory}`, () => client.session.status({ query: { directory } }), errors)
-    if (result && typeof result === "object") Object.assign(statuses, result)
-  }
-  const records = {}
-  for (const session of sessions) {
-    const messages = await call(`client.session.messages:${session.id}`, () => client.session.messages({ path: { id: session.id }, query: { directory: session.directory, limit: settings.messagesLimit } }), errors)
-    records[session.id] = await buildRecord(session, Array.isArray(messages) ? messages : [], statuses, projects, previous.sessions, settings)
-  }
-  updateDuplicates(records)
-  const index = { schemaVersion: 1, protocol: "v1", updatedAt: now(), projects: projects.filter((item) => item?.worktree).map((item) => ({ id: item.id || null, worktree: resolve(item.worktree), vcs: item.vcs || null })), sessions: records }
-  await writeJson(INDEX_FILE, index)
-  const report = await writeReports(index, settings, errors)
-  await appendFile(ACTIONS_FILE, `${JSON.stringify({ at: now(), action: "audit", mode: "full-dry-run", counts: report.counts, errors: errors.length })}\n`, "utf8")
-  return { ...report.counts, errors, paths }
-}
-
-async function saveOverride(args) {
-  await ensureStorage()
-  if (args.confirm !== true) return { applied: false, reason: "Explicit confirm=true is required; no settings changed." }
-  if (!args.sessionId) return { applied: false, reason: "sessionId is required; no settings changed." }
-  const settings = await loadSettings()
-  const backup = join(BACKUPS, `override-${Date.now()}.json`)
-  await writeJson(backup, { type: "settings-backup", settings, createdAt: now() })
-  settings.manualOverrides[args.sessionId] = { ...(settings.manualOverrides[args.sessionId] || {}), ...(args.title ? { title: sanitize(args.title, 96) } : {}), ...(args.topic ? { topic: sanitize(args.topic, 40) } : {}), ...(args.archiveSuggestion ? { archiveSuggestion: sanitize(args.archiveSuggestion, 80) } : {}) }
-  await writeJson(SETTINGS_FILE, settings)
-  return { applied: true, sessionId: args.sessionId, backup, paths }
-}
-
-function isInside(directory, file) {
-  const base = resolve(directory)
-  const candidate = resolve(file)
-  const value = relative(base, candidate)
-  return value === "" || (!value.startsWith("..") && !value.includes(":"))
-}
-
-async function applyRenames(client, currentDirectory, args) {
-  await ensureStorage()
-  if (args.confirm !== true) return { applied: false, reason: "Explicit confirm=true is required; no sessions changed." }
-  if (args.move === true) return { applied: false, refusedMove: true, reason: "Move refused: V1 has no supported session.move operation." }
-  const index = await loadIndex()
-  const selected = Array.isArray(args.sessionIds) ? new Set(args.sessionIds) : null
-  if (!args.all && !selected) return { applied: false, reason: "Provide all=true or sessionIds; no sessions changed." }
-  const records = Object.values(index.sessions).filter((record) => (args.all || selected.has(record.id)) && !record.ignored)
-  const results = []
-  for (const record of records) {
-    if (record.manualTitlePreservation && !record.explicitTitleOverride) {
-      results.push({ id: record.id, result: "skipped", reason: "manual title preserved" })
-      continue
-    }
-    if (!record.proposedTitle || record.proposedTitle === record.currentTitle) {
-      results.push({ id: record.id, result: "skipped", reason: "title unchanged" })
-      continue
-    }
-    const backup = join(BACKUPS, `${Date.now()}-${record.id}.json`)
-    await writeJson(backup, { type: "session-organizer-backup", before: record, proposedTitle: record.proposedTitle, createdAt: now() })
-    try {
-      const updated = responseData(await client.session.update({ path: { id: record.id }, query: { directory: record.directory || currentDirectory }, body: { title: record.proposedTitle } }))
-      record.currentTitle = sanitize(updated?.title || record.proposedTitle, 160)
-      record.manualTitlePreservation = false
-      results.push({ id: record.id, result: "renamed", title: record.currentTitle, backup })
-      await appendFile(ACTIONS_FILE, `${JSON.stringify({ at: now(), action: "rename", id: record.id, backup })}\n`, "utf8")
-    } catch (error) {
-      results.push({ id: record.id, result: "failed", error: safeError(error), backup })
-    }
-  }
-  index.updatedAt = now()
-  await writeJson(INDEX_FILE, index)
-  await writeReports(index, await loadSettings(), [])
-  return { applied: true, renamed: results.filter((item) => item.result === "renamed").length, results, move: "skipped/refused: V1 has no session.move", paths }
-}
-
-async function undoRenames(client, currentDirectory, args) {
-  await ensureStorage()
-  if (args.confirm !== true) return { applied: false, reason: "Explicit confirm=true is required; no sessions changed." }
-  const files = Array.isArray(args.backupFiles) ? args.backupFiles : []
-  if (!files.length) return { applied: false, reason: "backupFiles is required; no sessions changed." }
-  const index = await loadIndex()
-  const results = []
-  for (const file of files) {
-    const resolved = resolve(file)
-    if (!isInside(BACKUPS, resolved)) {
-      results.push({ file, result: "refused", reason: "backup is outside the organizer backup directory" })
-      continue
-    }
-    const backup = await readJson(resolved, null)
-    const before = backup?.before
-    if (!before?.id || !before.currentTitle) {
-      results.push({ file, result: "refused", reason: "invalid session backup" })
-      continue
-    }
-    try {
-      await client.session.update({ path: { id: before.id }, query: { directory: before.directory || currentDirectory }, body: { title: before.currentTitle } })
-      if (index.sessions[before.id]) {
-        index.sessions[before.id].currentTitle = before.currentTitle
-        index.sessions[before.id].proposedTitle = before.currentTitle
-      }
-      results.push({ file, id: before.id, result: "restored", title: before.currentTitle })
-      await appendFile(ACTIONS_FILE, `${JSON.stringify({ at: now(), action: "undo-rename", id: before.id, backup: file })}\n`, "utf8")
-    } catch (error) {
-      results.push({ file, id: before.id, result: "failed", error: safeError(error) })
-    }
-  }
-  index.updatedAt = now()
-  await writeJson(INDEX_FILE, index)
-  await writeReports(index, await loadSettings(), [])
-  return { applied: true, results, paths }
+  return writeReportFiles(index, settings, errors, { writeDashboard, now })
 }
 
 async function diagnose(client) {
@@ -257,46 +110,15 @@ export const SessionOrganizer = async ({ client, directory }) => {
   await startDashboardServer()
   let operation = Promise.resolve()
   const enqueue = (work) => { operation = operation.then(work, work); return operation }
-  void enqueue(() => runAudit(client, directory)).catch(() => undefined)
+  void enqueue(() => runAudit(client, directory, { writeReports })).catch(() => undefined)
   let refreshTimer = null
   const scheduleRefresh = async () => {
     if (refreshTimer) clearTimeout(refreshTimer)
     const settings = await loadSettings()
-    refreshTimer = setTimeout(() => { refreshTimer = null; void enqueue(() => runAudit(client, directory)).catch(() => undefined) }, Number(settings.debounceMs) || 1500)
+     refreshTimer = setTimeout(() => { refreshTimer = null; void enqueue(() => runAudit(client, directory, { writeReports })).catch(() => undefined) }, Number(settings.debounceMs) || 1500)
   }
 
-  const tool = {
-    session_organizer_audit: defineTool({
-      description: "Generate a full local read-only audit of OpenCode V1 sessions and refresh the dashboard.",
-      args: { refresh: defineTool.schema.boolean().optional() },
-      async execute() { const result = await enqueue(() => runAudit(client, directory)); return { title: "Session Organizer audit", output: JSON.stringify(result, null, 2), metadata: result } },
-    }),
-    session_organizer_status: defineTool({
-      description: "Show local Session Organizer paths, settings, and indexed session count.",
-      args: {},
-      async execute() { const index = await loadIndex(); const settings = await loadSettings(); const result = { updatedAt: index.updatedAt, sessions: Object.keys(index.sessions).length, settings, paths }; return { title: "Session Organizer status", output: JSON.stringify(result, null, 2), metadata: result } },
-    }),
-    session_organizer_diagnose: defineTool({
-      description: "Check OpenCode V1 connectivity, local storage, and dashboard availability.",
-      args: {},
-      async execute() { const result = await enqueue(() => diagnose(client)); return { title: "Session Organizer diagnostics", output: JSON.stringify(result, null, 2), metadata: result } },
-    }),
-    session_organizer_override: defineTool({
-      description: "Save an explicit local title, topic, or archive override. Requires confirm=true and never changes the source session.",
-      args: { confirm: defineTool.schema.boolean(), sessionId: defineTool.schema.string(), title: defineTool.schema.string().optional(), topic: defineTool.schema.string().optional(), archiveSuggestion: defineTool.schema.string().optional() },
-      async execute(args) { const result = await enqueue(() => saveOverride(args)); return { title: "Session Organizer override", output: JSON.stringify(result, null, 2), metadata: result } },
-    }),
-    session_organizer_apply: defineTool({
-      description: "Rename selected or all non-manual sessions after explicit confirm=true. Never moves or deletes sessions.",
-      args: { confirm: defineTool.schema.boolean(), all: defineTool.schema.boolean().optional(), sessionIds: defineTool.schema.array(defineTool.schema.string()).optional(), move: defineTool.schema.boolean().optional() },
-      async execute(args) { const result = await enqueue(() => applyRenames(client, directory, args)); return { title: "Session Organizer apply", output: JSON.stringify(result, null, 2), metadata: result } },
-    }),
-    session_organizer_undo: defineTool({
-      description: "Restore titles from explicit Session Organizer backup files. Requires confirm=true.",
-      args: { confirm: defineTool.schema.boolean(), backupFiles: defineTool.schema.array(defineTool.schema.string()) },
-      async execute(args) { const result = await enqueue(() => undoRenames(client, directory, args)); return { title: "Session Organizer undo", output: JSON.stringify(result, null, 2), metadata: result } },
-    }),
-  }
+  const tool = createTools({ client, directory, enqueue, writeReports, diagnose })
 
   const event = async ({ event: incoming }) => {
     const actual = incoming?.payload?.type ? incoming.payload : incoming || {}
