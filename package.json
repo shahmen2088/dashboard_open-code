@@ -6,6 +6,9 @@
   "type": "module",
   "files": [
     "src/",
+    "dist/",
+    "scripts/",
+    "test/",
     "config/",
     "install.ps1",
     "install.sh",
@@ -13,10 +16,15 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check src/session-organizer.js"
+    "check": "node --check src/session-organizer.js && node --check src/config.js && node --check src/text.js && node --check src/storage.js && node --check src/classification.js && node --check src/server.js && node --check src/core/audit.js",
+    "test": "node --test test/unit test/security",
+    "build": "node scripts/build.mjs"
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
   },
   "license": "MIT"
 }

@@ -25,12 +25,16 @@ The project is designed so every user has an independent store. No machine-speci
 Windows PowerShell:
 
 ```powershell
+npm install
+npm run build
 & .\install.ps1
 ```
 
 macOS/Linux:
 
 ```sh
+npm install
+npm run build
 sh ./install.sh
 ```
 
@@ -89,7 +93,10 @@ Use `ignoredSessionIds` and `ignoredProjectDirectories` to exclude local records
 ## Development
 
 ```sh
+npm install
 npm run check
+npm test
+npm run build
 ```
 
-The repository intentionally has no runtime dependency installation step. OpenCode supplies the plugin API when it loads the installed plugin.
+The build creates `dist/session-organizer.js`, a single Node-targeted ESM bundle. The OpenCode host still supplies `@opencode-ai/plugin`; no application runtime package is installed into the user's store.
