@@ -391,7 +391,7 @@ async function runAudit(client, currentDirectory) {
   const previous = await loadIndex()
   const errors = []
   const projects = await getProjects(client, errors)
-  const directories = [...new Set([currentDirectory, ...projects.map((item) => item?.worktree)].filter(Boolean).map(resolve))]
+  const directories = [...new Set([currentDirectory, ...projects.map((item) => item?.worktree)].filter(Boolean).map((item) => resolve(item)))]
   const roots = []
   for (const directory of directories) {
     const sessions = await call(`client.session.list:${directory}`, () => client.session.list({ query: { directory } }), errors)
@@ -399,7 +399,7 @@ async function runAudit(client, currentDirectory) {
   }
   const sessions = await collectTree(client, roots, errors)
   const statuses = {}
-  for (const directory of [...new Set(sessions.map((item) => item.directory).filter(Boolean).map(resolve))]) {
+  for (const directory of [...new Set(sessions.map((item) => item.directory).filter(Boolean).map((item) => resolve(item)))]) {
     const result = await call(`client.session.status:${directory}`, () => client.session.status({ query: { directory } }), errors)
     if (result && typeof result === "object") Object.assign(statuses, result)
   }
