@@ -1,26 +1,26 @@
-# OpenCode Session Organizer
+# Организатор сессий OpenCode
 
-Reusable OpenCode V1 plugin that builds a local, read-only index and dashboard for the current user's sessions.
+Переиспользуемый плагин OpenCode V1, который создаёт локальный индекс сессий пользователя и доступную только для чтения панель.
 
-## What It Does
+## Возможности
 
-- Reads projects, sessions, child sessions, statuses, and limited message previews through the official OpenCode SDK.
-- Generates a searchable local dashboard organized as projects and chats, with topic, status, duplicate, archive, and preview information.
-- Refreshes after session events arrive with a short debounce and polls the dashboard endpoint every five seconds.
-- Keeps all data local and redacts common secrets before storing excerpts.
-- Never accesses `opencode.db` directly.
-- Never moves or deletes sessions.
-- Never renames sessions automatically. Any rename workflow must be implemented as an explicit confirmed action.
+- Читает проекты, сессии, дочерние сессии, статусы и ограниченные превью сообщений через официальный SDK OpenCode.
+- Создаёт локальную панель с поиском, организованную по проектам и чатам, с информацией о теме, статусе, дубликатах, архиве и превью.
+- Обновляет данные после событий сессий с короткой задержкой и опрашивает endpoint панели каждые пять секунд.
+- Хранит все данные локально и удаляет распространённые секреты перед сохранением фрагментов.
+- Никогда не обращается напрямую к `opencode.db`.
+- Никогда не перемещает и не удаляет сессии.
+- Никогда не переименовывает сессии автоматически. Любой сценарий переименования должен выполняться только как явно подтверждённое действие.
 
-The project is designed so every user has an independent store. No machine-specific paths, session snapshots, logs, or secrets belong in this repository.
+Проект рассчитан на отдельное хранилище для каждого пользователя. Пути конкретной машины, снимки сессий, журналы и секреты не должны попадать в этот репозиторий.
 
-## Requirements
+## Требования
 
-- OpenCode with the V1 plugin API.
-- Node.js 18 or newer for syntax checks and the local HTTP server.
-- The OpenCode runtime must provide `@opencode-ai/plugin`.
+- OpenCode с API плагинов V1.
+- Node.js 18 или новее для проверки синтаксиса и локального HTTP-сервера.
+- Среда выполнения OpenCode должна предоставлять `@opencode-ai/plugin`.
 
-## Install
+## Установка
 
 Windows PowerShell:
 
@@ -34,62 +34,62 @@ macOS/Linux:
 sh ./install.sh
 ```
 
-The installer copies the plugin to the user's OpenCode plugin directory and creates a settings file only when one does not already exist. It does not overwrite existing user settings unless PowerShell is called with `-ForceSettings`.
+Установщик копирует плагин в каталог плагинов OpenCode пользователя и создаёт файл настроек только при его отсутствии. Существующие пользовательские настройки не перезаписываются, если PowerShell не запущен с параметром `-ForceSettings`.
 
-Restart OpenCode after installation and run the `session_organizer_audit` tool. Then run `session_organizer_status` or `session_organizer_diagnose` to get the local dashboard URL.
+После установки перезапустите OpenCode и выполните инструмент `session_organizer_audit`. Затем выполните `session_organizer_status` или `session_organizer_diagnose`, чтобы получить локальный URL панели.
 
-The dashboard searches chat title, chat description, project path, and chat ID. Select a project first when working with a large workspace. Each chat detail panel shows a Windows command and a macOS/Linux command in the form `opencode -s <chat-id>`, plus the exact project directory and step-by-step instructions for opening the chat.
+Панель ищет по названию и описанию чата, пути проекта и ID чата. При работе с большим рабочим пространством сначала выберите проект. В панели сведений каждого чата отображаются команда для Windows и команда для macOS/Linux в формате `opencode -s <chat-id>`, точный каталог проекта и пошаговые инструкции по открытию чата.
 
-## Local Storage
+## Локальное хранилище
 
-Default storage:
+Хранилище по умолчанию:
 
 ```text
 ~/.config/opencode/session-organizer/
 ```
 
-Override it per user with:
+Пользователь может изменить его с помощью переменной:
 
 ```text
 OPENCODE_SESSION_ORGANIZER_HOME=/path/to/private/store
 ```
 
-The generated files are intentionally ignored by Git:
+Сгенерированные файлы намеренно исключены из Git:
 
-- `index.json` - local session index;
-- `settings.json` - local preferences and explicit overrides;
-- `reports/audit-latest.json` - structured report;
-- `reports/dashboard.html` - generated dashboard;
-- `actions.log` - short local audit entries;
-- `backups/` - local backups for explicit settings changes.
+- `index.json` - локальный индекс сессий;
+- `settings.json` - локальные настройки и явные переопределения;
+- `reports/audit-latest.json` - структурированный отчёт;
+- `reports/dashboard.html` - сгенерированная панель;
+- `actions.log` - краткие локальные записи аудита;
+- `backups/` - локальные резервные копии явных изменений настроек.
 
-## Safety Model
+## Модель безопасности
 
-- Default mode is dry-run and read-only.
-- `autoRename` and `autoMove` are false and are not used by the plugin.
-- Session content is limited by settings and sanitized before persistence.
-- The dashboard server binds to `127.0.0.1` on a random local port.
-- The dashboard is not an authentication boundary. Do not expose its port outside the local machine.
+- Режим по умолчанию - пробный запуск без записи и только чтение.
+- Параметры `autoRename` и `autoMove` имеют значение `false` и плагином не используются.
+- Объём содержимого сессий ограничивается настройками, а данные очищаются перед сохранением.
+- Сервер панели привязывается к `127.0.0.1` и случайному локальному порту.
+- Панель не является границей аутентификации. Не открывайте её порт за пределами локальной машины.
 
-## Configuration
+## Настройка
 
-Copy `config/settings.example.json` only if a new settings file is needed. Important limits include `messagesLimit`, `previewMessagesLimit`, `previewMessageChars`, and `previewMaxChars`.
+Копируйте `config/settings.example.json` только при необходимости создать новый файл настроек. Важные ограничения включают `messagesLimit`, `previewMessagesLimit`, `previewMessageChars` и `previewMaxChars`.
 
-Use `ignoredSessionIds` and `ignoredProjectDirectories` to exclude local records from proposed actions. Use `manualOverrides` for explicit local metadata; overrides do not modify the source session.
+Используйте `ignoredSessionIds` и `ignoredProjectDirectories`, чтобы исключить локальные записи из предлагаемых действий. Используйте `manualOverrides` для явных локальных метаданных; переопределения не изменяют исходную сессию.
 
-## Tools
+## Инструменты
 
-- `session_organizer_audit` - build a full local snapshot and regenerate the dashboard;
-- `session_organizer_status` - show local paths, settings, and index size;
-- `session_organizer_diagnose` - check SDK reachability and dashboard availability;
-- `session_organizer_override` - save local metadata after `confirm=true`;
-- `session_organizer_apply` - rename selected records only after `confirm=true`;
-- `session_organizer_undo` - restore titles from explicit backup files after `confirm=true`.
+- `session_organizer_audit` - создать полный локальный снимок и заново сгенерировать панель;
+- `session_organizer_status` - показать локальные пути, настройки и размер индекса;
+- `session_organizer_diagnose` - проверить доступность SDK и панели;
+- `session_organizer_override` - сохранить локальные метаданные после `confirm=true`;
+- `session_organizer_apply` - переименовать выбранные записи только после `confirm=true`;
+- `session_organizer_undo` - восстановить названия из явно указанных резервных копий после `confirm=true`.
 
-## Development
+## Разработка
 
 ```sh
 npm run check
 ```
 
-The repository intentionally has no runtime dependency installation step. OpenCode supplies the plugin API when it loads the installed plugin.
+В репозитории намеренно нет отдельного шага установки runtime-зависимостей. OpenCode предоставляет API плагина при загрузке установленного плагина.
