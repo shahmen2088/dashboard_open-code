@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 1,
   "autoRename": false,
   "autoMove": false,
   "messagesLimit": 120,
@@ -11,31 +11,5 @@
   "debounceMs": 1500,
   "ignoredSessionIds": [],
   "ignoredProjectDirectories": [],
-  "manualOverrides": {},
-  "dashboard": {
-    "language": "ru",
-    "currency": "USD",
-    "refreshSeconds": 5
-  },
-  "usage": {
-    "enabled": true,
-    "retentionDays": 365,
-    "timezone": "Europe/Moscow",
-    "pricingOverrides": {}
-  },
-  "budgets": {
-    "daily": null,
-    "weekly": null,
-    "monthly": null,
-    "warningThresholds": [0.7, 0.9, 1],
-    "hardStop": false
-  },
-  "modelSwitching": {
-    "enabled": true,
-    "allowDefaultConfigWrite": false,
-    "requireConfirmation": true
-  },
-  "security": {
-    "requireRequestToken": true
-  }
+  "manualOverrides": {}
 }

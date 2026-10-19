@@ -9,11 +9,7 @@ $pluginDir = Join-Path $opencode "plugins"
 $store = if ($env:OPENCODE_SESSION_ORGANIZER_HOME) { $env:OPENCODE_SESSION_ORGANIZER_HOME } else { Join-Path $opencode "session-organizer" }
 
 New-Item -ItemType Directory -Force -Path $pluginDir, $store | Out-Null
-$bundle = Join-Path $repo "dist\session-organizer.js"
-if (-not (Test-Path -LiteralPath $bundle)) {
-  throw "dist\session-organizer.js is missing. Run npm install and npm run build first."
-}
-Copy-Item $bundle (Join-Path $pluginDir "session-organizer.js") -Force
+Copy-Item (Join-Path $repo "src\session-organizer.js") (Join-Path $pluginDir "session-organizer.js") -Force
 
 $settings = Join-Path $store "settings.json"
 if ($ForceSettings -or -not (Test-Path -LiteralPath $settings)) {

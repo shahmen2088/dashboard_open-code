@@ -1,4 +1,4 @@
-# OpenCode Session Organizer 0.2.0
+# OpenCode Session Organizer
 
 Reusable OpenCode V1 plugin that builds a local, read-only index and dashboard for the current user's sessions.
 
@@ -6,7 +6,6 @@ Reusable OpenCode V1 plugin that builds a local, read-only index and dashboard f
 
 - Reads projects, sessions, child sessions, statuses, and limited message previews through the official OpenCode SDK.
 - Generates a searchable local dashboard organized as projects and chats, with topic, status, duplicate, archive, and preview information.
-- Extracts assistant token usage and reported cost into a deduplicated local ledger; missing cost is shown as unknown, never as a false zero.
 - Refreshes after session events arrive with a short debounce and polls the dashboard endpoint every five seconds.
 - Keeps all data local and redacts common secrets before storing excerpts.
 - Never accesses `opencode.db` directly.
@@ -26,16 +25,12 @@ The project is designed so every user has an independent store. No machine-speci
 Windows PowerShell:
 
 ```powershell
-npm install
-npm run build
 & .\install.ps1
 ```
 
 macOS/Linux:
 
 ```sh
-npm install
-npm run build
 sh ./install.sh
 ```
 
@@ -66,8 +61,6 @@ The generated files are intentionally ignored by Git:
 - `reports/audit-latest.json` - structured report;
 - `reports/dashboard.html` - generated dashboard;
 - `actions.log` - short local audit entries;
-- `usage-ledger.jsonl` - normalized assistant usage records without message text;
-- `usage-index.json` - materialized usage totals for local API reads;
 - `backups/` - local backups for explicit settings changes.
 
 ## Safety Model
@@ -93,37 +86,10 @@ Use `ignoredSessionIds` and `ignoredProjectDirectories` to exclude local records
 - `session_organizer_apply` - rename selected records only after `confirm=true`;
 - `session_organizer_undo` - restore titles from explicit backup files after `confirm=true`.
 
-Read-only usage API:
-
-- `GET /api/usage?groupBy=day|project|session|provider|model` - local aggregates;
-- `GET /api/usage/export.csv` - aggregate CSV without message text.
-- `GET /api/models` - normalized SDK model catalog or the last local cache.
-- `POST /api/actions/session-model/preview` - validate a proposed session model change.
-- `POST /api/actions/session-model/apply` - apply a matching, unexpired preview when the SDK supports it.
-
-Model changes are never reported as successful without reading the session back. If the current SDK has no supported switch operation, apply returns a safe copyable command instead. Write requests require the in-memory token bootstrapped into the local dashboard page and a same-origin JSON request.
-
-Official provider quota is reported as unavailable unless an explicit official provider adapter is added; local budgets are never presented as provider quotas.
-
 ## Development
 
 ```sh
-npm install
 npm run check
-npm test
-npm run build
 ```
 
-The build creates `dist/session-organizer.js`, a single Node-targeted ESM bundle. The OpenCode host still supplies `@opencode-ai/plugin`; no application runtime package is installed into the user's store.
-
-### Source Layout
-
-- `src/session-organizer.js` - V1 entrypoint, queue, events, and dashboard template.
-- `src/core/audit.js` - SDK response handling, session normalization, and duplicate detection.
-- `src/core/pipeline.js` - ordered full-audit pipeline.
-- `src/actions.js` - explicit-confirm rename, undo, and local override actions.
-- `src/reports.js` - JSON, CSV, Markdown, and report orchestration.
-- `src/tools.js` - OpenCode tool definitions.
-- `src/compat/opencode-v1.js` - V1 response and capability adapter.
-- `src/server.js` - loopback-only HTTP server.
-- `src/storage.js`, `src/text.js`, `src/classification.js`, `src/config.js` - shared infrastructure and pure helpers.
+The repository intentionally has no runtime dependency installation step. OpenCode supplies the plugin API when it loads the installed plugin.

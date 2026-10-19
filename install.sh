@@ -7,11 +7,7 @@ PLUGIN_DIR="$OPENCODE_DIR/plugins"
 STORE="${OPENCODE_SESSION_ORGANIZER_HOME:-$OPENCODE_DIR/session-organizer}"
 
 mkdir -p "$PLUGIN_DIR" "$STORE"
-if [ ! -f "$REPO/dist/session-organizer.js" ]; then
-  printf '%s\n' 'dist/session-organizer.js is missing. Run npm install and npm run build first.' >&2
-  exit 1
-fi
-cp "$REPO/dist/session-organizer.js" "$PLUGIN_DIR/session-organizer.js"
+cp "$REPO/src/session-organizer.js" "$PLUGIN_DIR/session-organizer.js"
 
 if [ ! -f "$STORE/settings.json" ]; then
   cp "$REPO/config/settings.example.json" "$STORE/settings.json"
