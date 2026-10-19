@@ -337,7 +337,7 @@ function enhanceDashboardViews(page) {
   function setView(view){localStorage.setItem("opencode-dashboard-view",view);document.querySelectorAll("[data-view-panel]").forEach(panel=>panel.hidden=panel.dataset.viewPanel!==view);document.querySelectorAll(".view-tab").forEach(tab=>{const active=tab.dataset.view===view;tab.classList.toggle("view-tab--active",active);tab.setAttribute("aria-selected",String(active))})}
   document.querySelectorAll(".view-tab").forEach(tab=>tab.onclick=()=>setView(tab.dataset.view));renderViews();setView(localStorage.getItem("opencode-dashboard-view")||"map");
 })();
-</script>`;return page.replace("</script></body>",script+"</script></body>")
+</script>`;return page.replace("</script></body>","</script>"+script+"</body>")
 }
 
 async function writeDashboardLegacy(report) {
