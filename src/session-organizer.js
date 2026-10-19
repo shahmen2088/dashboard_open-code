@@ -581,7 +581,12 @@ export const SessionOrganizer = async ({ client, directory }) => {
   await ensureStorage()
   let operation = Promise.resolve()
   const enqueue = (work) => { operation = operation.then(work, work); return operation }
-  dashboardReload = () => enqueue(() => runAudit(client, directory))
+  dashboardReload = () => enqueue(async () => {
+    const index = await loadIndex()
+    const fallbackDirectory = Object.values(index.sessions).find((item) => item && item.directory)?.directory || index.projects.find((item) => item && item.worktree)?.worktree
+    const usableDirectory = directory && directory !== "/" && !/^[A-Za-z]:[\\/]?$/.test(directory) ? directory : fallbackDirectory || directory
+    return runAudit(client, usableDirectory)
+  })
   await startDashboardServer()
   void enqueue(() => runAudit(client, directory)).catch(() => undefined)
   let refreshTimer = null
