@@ -100,3 +100,14 @@ npm run build
 ```
 
 The build creates `dist/session-organizer.js`, a single Node-targeted ESM bundle. The OpenCode host still supplies `@opencode-ai/plugin`; no application runtime package is installed into the user's store.
+
+### Source Layout
+
+- `src/session-organizer.js` - V1 entrypoint, queue, events, and dashboard template.
+- `src/core/audit.js` - SDK response handling, session normalization, and duplicate detection.
+- `src/core/pipeline.js` - ordered full-audit pipeline.
+- `src/actions.js` - explicit-confirm rename, undo, and local override actions.
+- `src/reports.js` - JSON, CSV, Markdown, and report orchestration.
+- `src/tools.js` - OpenCode tool definitions.
+- `src/server.js` - loopback-only HTTP server.
+- `src/storage.js`, `src/text.js`, `src/classification.js`, `src/config.js` - shared infrastructure and pure helpers.
