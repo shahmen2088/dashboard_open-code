@@ -97,6 +97,7 @@ Read-only usage API:
 
 - `GET /api/usage?groupBy=day|project|session|provider|model` - local aggregates;
 - `GET /api/usage/export.csv` - aggregate CSV without message text.
+- `GET /api/models` - normalized SDK model catalog or the last local cache.
 
 ## Development
 

@@ -16,6 +16,7 @@ var SUMMARY_FILE = join(REPORTS, "summary.md");
 var DASHBOARD_HTML = join(REPORTS, "dashboard.html");
 var USAGE_LEDGER = join(STORE, "usage-ledger.jsonl");
 var USAGE_INDEX = join(STORE, "usage-index.json");
+var MODELS_FILE = join(STORE, "models.json");
 var DEFAULT_SETTINGS = {
   schemaVersion: 1,
   autoRename: false,
@@ -43,7 +44,8 @@ var paths = {
   summary: SUMMARY_FILE,
   backups: BACKUPS,
   usageLedger: USAGE_LEDGER,
-  usageIndex: USAGE_INDEX
+  usageIndex: USAGE_INDEX,
+  models: MODELS_FILE
 };
 var GENERIC_TITLE = /^(new session|session(?:\s+\d+)?|untitled(?:\s+session)?|opencode session)$/i;
 
@@ -244,9 +246,104 @@ async function loadUsageIndex() {
   return buildUsageIndex(await loadUsageRecords());
 }
 
+// src/compat/opencode-v1.js
+function responseData(response) {
+  if (response && typeof response === "object" && Object.prototype.hasOwnProperty.call(response, "error")) {
+    if (response.error) throw new Error(safeError(response.error));
+    if (Object.prototype.hasOwnProperty.call(response, "data")) return response.data;
+  }
+  return response && typeof response === "object" && Object.prototype.hasOwnProperty.call(response, "data") ? response.data : response;
+}
+async function call(label, operation, errors) {
+  try {
+    return responseData(await operation());
+  } catch (error) {
+    errors.push({ operation: label, error: safeError(error) });
+    return null;
+  }
+}
+
+// src/models/catalog.js
+function objectEntries(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? Object.entries(value) : [];
+}
+function numberOrNull(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+function modelCost(raw = {}) {
+  const cost = raw.cost || raw.pricing || {};
+  return {
+    input: numberOrNull(cost.input ?? cost.inputPerMillion),
+    output: numberOrNull(cost.output ?? cost.outputPerMillion),
+    cacheRead: numberOrNull(cost.cacheRead ?? cost.cacheReadPerMillion ?? cost.cache_read),
+    cacheWrite: numberOrNull(cost.cacheWrite ?? cost.cacheWritePerMillion ?? cost.cache_write)
+  };
+}
+function modelLimits(raw = {}) {
+  const limits = raw.limits || raw.limit || {};
+  return {
+    context: numberOrNull(limits.context ?? raw.contextLength ?? raw.context),
+    input: numberOrNull(limits.input),
+    output: numberOrNull(limits.output ?? raw.maxOutput)
+  };
+}
+function modelVariants(raw = {}) {
+  if (Array.isArray(raw.variants)) return raw.variants.map(String);
+  return raw.variants && typeof raw.variants === "object" ? Object.keys(raw.variants) : [];
+}
+function providerModels(payload) {
+  if (Array.isArray(payload?.models)) return payload.models.map((model) => ({ providerId: model.providerID || model.providerId || model.provider || "unknown", modelId: model.id || model.modelID || model.modelId, raw: model }));
+  const all = payload?.all || payload?.providers || payload;
+  const result = [];
+  for (const [providerId, provider] of objectEntries(all)) {
+    const models = provider?.models || provider?.model || {};
+    for (const [modelId, raw] of objectEntries(models)) result.push({ providerId, modelId, raw: raw || {} });
+  }
+  return result.filter((item) => item.modelId);
+}
+function connectedProviders(payload) {
+  const connected = payload?.connected || payload?.enabled || [];
+  return new Set(Array.isArray(connected) ? connected.map((item) => typeof item === "string" ? item : item?.id || item?.providerID).filter(Boolean) : []);
+}
+function normalizeCatalog(payload, updatedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+  const connected = connectedProviders(payload);
+  const models = providerModels(payload).map(({ providerId, modelId, raw }) => ({
+    providerId,
+    modelId,
+    displayName: raw.name || raw.displayName || modelId,
+    available: raw.available !== false && (connected.size === 0 || connected.has(providerId)),
+    local: Boolean(raw.local || providerId === "local"),
+    limits: modelLimits(raw),
+    cost: modelCost(raw),
+    capabilities: {
+      tools: Boolean(raw.capabilities?.tools ?? raw.tool_call ?? raw.toolCalling),
+      reasoning: Boolean(raw.capabilities?.reasoning ?? raw.reasoning)
+    },
+    variants: modelVariants(raw)
+  }));
+  return { schemaVersion: 2, updatedAt, source: models.length ? "sdk" : "none", models };
+}
+async function loadModelCatalog(client) {
+  await ensureStorage();
+  if (typeof client?.provider?.list === "function") {
+    try {
+      const payload = responseData(await client.provider.list());
+      const catalog = normalizeCatalog(payload);
+      if (catalog.models.length) {
+        await writeJson(MODELS_FILE, catalog);
+        return { ...catalog, paths };
+      }
+    } catch {
+    }
+  }
+  const cached = await readJson(MODELS_FILE, null);
+  if (cached?.schemaVersion === 2) return { ...cached, source: "cache", paths };
+  return { schemaVersion: 2, updatedAt: null, source: "none", models: [], paths };
+}
+
 // src/server.js
 var dashboardServer = null;
-async function startDashboardServer() {
+async function startDashboardServer(client) {
   if (dashboardServer) return;
   const server = createServer(async (request, response) => {
     const send = (status, type, body) => {
@@ -259,6 +356,15 @@ async function startDashboardServer() {
         send(200, "application/json; charset=utf-8", await readFile3(AUDIT_JSON, "utf8"));
       } catch {
         send(404, "application/json; charset=utf-8", JSON.stringify({ error: "Audit has not been generated yet" }));
+      }
+      return;
+    }
+    if (url.pathname === "/api/models") {
+      try {
+        const catalog = await loadModelCatalog(client);
+        send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: catalog, error: null, meta: { generatedAt: (/* @__PURE__ */ new Date()).toISOString(), schemaVersion: 2 } }));
+      } catch (error) {
+        send(500, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: "MODEL_CATALOG_FAILED", message: String(error?.message || error) }, meta: { schemaVersion: 2 } }));
       }
       return;
     }
@@ -302,23 +408,6 @@ async function startDashboardServer() {
   dashboardServer = server;
   const address = server.address();
   paths.dashboardUrl = address && typeof address === "object" ? `http://127.0.0.1:${address.port}/` : null;
-}
-
-// src/compat/opencode-v1.js
-function responseData(response) {
-  if (response && typeof response === "object" && Object.prototype.hasOwnProperty.call(response, "error")) {
-    if (response.error) throw new Error(safeError(response.error));
-    if (Object.prototype.hasOwnProperty.call(response, "data")) return response.data;
-  }
-  return response && typeof response === "object" && Object.prototype.hasOwnProperty.call(response, "data") ? response.data : response;
-}
-async function call(label, operation, errors) {
-  try {
-    return responseData(await operation());
-  } catch (error) {
-    errors.push({ operation: label, error: safeError(error) });
-    return null;
-  }
 }
 
 // src/core/pipeline.js
@@ -450,12 +539,12 @@ function projectGroups(index) {
 }
 
 // src/usage/extract.js
-function numberOrNull(value) {
+function numberOrNull2(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 function tokenValue(tokens, ...keys) {
   for (const key of keys) {
-    const value = numberOrNull(tokens?.[key]);
+    const value = numberOrNull2(tokens?.[key]);
     if (value !== null) return value;
   }
   return 0;
@@ -486,7 +575,7 @@ function mergeParts(parts) {
     const source = usageSource(part);
     const tokens = normalizeTokens(source.tokens || source);
     for (const key of ["input", "output", "reasoning", "cacheRead", "cacheWrite", "total"]) merged.tokens[key] = (merged.tokens[key] || 0) + tokens[key];
-    if (numberOrNull(source.cost) !== null) merged.cost = (merged.cost || 0) + source.cost;
+    if (numberOrNull2(source.cost) !== null) merged.cost = (merged.cost || 0) + source.cost;
     merged.providerID ||= source.providerID || source.providerId || null;
     merged.modelID ||= source.modelID || source.modelId || null;
     merged.variant ||= source.variant || null;
@@ -503,7 +592,7 @@ function extractUsage(message, session, capturedAt = (/* @__PURE__ */ new Date()
   const source = direct || fallback;
   if (!source) return null;
   const tokens = normalizeTokens(source.tokens || source);
-  const reportedCost = numberOrNull(source.cost);
+  const reportedCost = numberOrNull2(source.cost);
   const cost = reportedCost !== null && reportedCost > 0 ? reportedCost : null;
   return {
     schemaVersion: 2,
@@ -837,7 +926,7 @@ async function diagnose(client) {
 }
 var SessionOrganizer = async ({ client, directory }) => {
   await ensureStorage();
-  await startDashboardServer();
+  await startDashboardServer(client);
   let operation = Promise.resolve();
   const enqueue = (work) => {
     operation = operation.then(work, work);

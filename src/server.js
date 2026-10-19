@@ -3,10 +3,11 @@ import { createServer } from "node:http"
 import { AUDIT_JSON, DASHBOARD_HTML, paths } from "./config.js"
 import { aggregateUsage, usageCsv } from "./usage/aggregate.js"
 import { loadUsageIndex, loadUsageRecords } from "./usage/ledger.js"
+import { loadModelCatalog } from "./models/catalog.js"
 
 let dashboardServer = null
 
-export async function startDashboardServer() {
+export async function startDashboardServer(client) {
   if (dashboardServer) return
   const server = createServer(async (request, response) => {
     const send = (status, type, body) => {
@@ -16,6 +17,15 @@ export async function startDashboardServer() {
     const url = new URL(request.url || "/", "http://127.0.0.1")
     if (url.pathname === "/api/report") {
       try { send(200, "application/json; charset=utf-8", await readFile(AUDIT_JSON, "utf8")) } catch { send(404, "application/json; charset=utf-8", JSON.stringify({ error: "Audit has not been generated yet" })) }
+      return
+    }
+    if (url.pathname === "/api/models") {
+      try {
+        const catalog = await loadModelCatalog(client)
+        send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: catalog, error: null, meta: { generatedAt: new Date().toISOString(), schemaVersion: 2 } }))
+      } catch (error) {
+        send(500, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: "MODEL_CATALOG_FAILED", message: String(error?.message || error) }, meta: { schemaVersion: 2 } }))
+      }
       return
     }
     if (url.pathname === "/api/usage" || url.pathname === "/api/usage/export.csv") {

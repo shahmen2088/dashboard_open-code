@@ -107,7 +107,7 @@ async function diagnose(client) {
 
 export const SessionOrganizer = async ({ client, directory }) => {
   await ensureStorage()
-  await startDashboardServer()
+  await startDashboardServer(client)
   let operation = Promise.resolve()
   const enqueue = (work) => { operation = operation.then(work, work); return operation }
   void enqueue(() => runAudit(client, directory, { writeReports })).catch(() => undefined)

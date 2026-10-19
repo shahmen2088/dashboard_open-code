@@ -13,6 +13,7 @@ export const SUMMARY_FILE = join(REPORTS, "summary.md")
 export const DASHBOARD_HTML = join(REPORTS, "dashboard.html")
 export const USAGE_LEDGER = join(STORE, "usage-ledger.jsonl")
 export const USAGE_INDEX = join(STORE, "usage-index.json")
+export const MODELS_FILE = join(STORE, "models.json")
 
 export const DEFAULT_SETTINGS = {
   schemaVersion: 1,
@@ -43,6 +44,7 @@ export const paths = {
   backups: BACKUPS,
   usageLedger: USAGE_LEDGER,
   usageIndex: USAGE_INDEX,
+  models: MODELS_FILE,
 }
 
 export const GENERIC_TITLE = /^(new session|session(?:\s+\d+)?|untitled(?:\s+session)?|opencode session)$/i
