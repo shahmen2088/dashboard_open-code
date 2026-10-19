@@ -5,7 +5,7 @@ Reusable OpenCode V1 plugin that builds a local, read-only index and dashboard f
 ## What It Does
 
 - Reads projects, sessions, child sessions, statuses, and limited message previews through the official OpenCode SDK.
-- Generates a searchable local dashboard with topic, status, project, duplicate, archive, and preview information.
+- Generates a searchable local dashboard organized as projects and chats, with topic, status, duplicate, archive, and preview information.
 - Refreshes after session events arrive with a short debounce and polls the dashboard endpoint every five seconds.
 - Keeps all data local and redacts common secrets before storing excerpts.
 - Never accesses `opencode.db` directly.
@@ -37,6 +37,8 @@ sh ./install.sh
 The installer copies the plugin to the user's OpenCode plugin directory and creates a settings file only when one does not already exist. It does not overwrite existing user settings unless PowerShell is called with `-ForceSettings`.
 
 Restart OpenCode after installation and run the `session_organizer_audit` tool. Then run `session_organizer_status` or `session_organizer_diagnose` to get the local dashboard URL.
+
+The dashboard searches chat title, chat description, project path, and chat ID. Select a project first when working with a large workspace. Each chat detail panel shows a Windows command and a macOS/Linux command in the form `opencode -s <chat-id>`, plus the exact project directory and step-by-step instructions for opening the chat.
 
 ## Local Storage
 
