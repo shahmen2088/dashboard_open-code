@@ -2,7 +2,7 @@ import { appendFile } from "node:fs/promises"
 import { join, relative, resolve } from "node:path"
 import { ACTIONS_FILE, BACKUPS, INDEX_FILE, paths, SETTINGS_FILE } from "./config.js"
 import { ensureStorage, loadIndex, loadSettings, readJson, writeJson } from "./storage.js"
-import { responseData } from "./core/audit.js"
+import { responseData } from "./compat/opencode-v1.js"
 import { safeError, sanitize } from "./text.js"
 
 function now() {

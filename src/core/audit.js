@@ -1,22 +1,7 @@
 import { isManualTitle, projectFor, topicFor, topicLabel } from "../classification.js"
-import { boundedText, safeError, sanitize, textParts } from "../text.js"
-
-export function responseData(response) {
-  if (response && typeof response === "object" && Object.prototype.hasOwnProperty.call(response, "error")) {
-    if (response.error) throw new Error(safeError(response.error))
-    if (Object.prototype.hasOwnProperty.call(response, "data")) return response.data
-  }
-  return response && typeof response === "object" && Object.prototype.hasOwnProperty.call(response, "data") ? response.data : response
-}
-
-export async function call(label, operation, errors) {
-  try {
-    return responseData(await operation())
-  } catch (error) {
-    errors.push({ operation: label, error: safeError(error) })
-    return null
-  }
-}
+import { call, responseData } from "../compat/opencode-v1.js"
+import { boundedText, sanitize, textParts } from "../text.js"
+export { call, responseData }
 
 export async function buildRecord(session, messages, statuses, projects, previous, settings) {
   const userTexts = messages.filter((item) => item?.info?.role === "user").map(textParts).filter(Boolean)

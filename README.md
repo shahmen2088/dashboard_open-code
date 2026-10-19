@@ -109,5 +109,6 @@ The build creates `dist/session-organizer.js`, a single Node-targeted ESM bundle
 - `src/actions.js` - explicit-confirm rename, undo, and local override actions.
 - `src/reports.js` - JSON, CSV, Markdown, and report orchestration.
 - `src/tools.js` - OpenCode tool definitions.
+- `src/compat/opencode-v1.js` - V1 response and capability adapter.
 - `src/server.js` - loopback-only HTTP server.
 - `src/storage.js`, `src/text.js`, `src/classification.js`, `src/config.js` - shared infrastructure and pure helpers.
