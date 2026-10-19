@@ -98,6 +98,10 @@ Read-only usage API:
 - `GET /api/usage?groupBy=day|project|session|provider|model` - local aggregates;
 - `GET /api/usage/export.csv` - aggregate CSV without message text.
 - `GET /api/models` - normalized SDK model catalog or the last local cache.
+- `POST /api/actions/session-model/preview` - validate a proposed session model change.
+- `POST /api/actions/session-model/apply` - apply a matching, unexpired preview when the SDK supports it.
+
+Model changes are never reported as successful without reading the session back. If the current SDK has no supported switch operation, apply returns a safe copyable command instead. Write requests require the in-memory token bootstrapped into the local dashboard page and a same-origin JSON request.
 
 ## Development
 

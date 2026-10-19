@@ -4,6 +4,8 @@ import { AUDIT_JSON, DASHBOARD_HTML, paths } from "./config.js"
 import { aggregateUsage, usageCsv } from "./usage/aggregate.js"
 import { loadUsageIndex, loadUsageRecords } from "./usage/ledger.js"
 import { loadModelCatalog } from "./models/catalog.js"
+import { applySessionModelChange, previewSessionModelChange } from "./models/switcher.js"
+import { injectSecurityBootstrap, readJsonBody, validWriteRequest } from "./server/security.js"
 
 let dashboardServer = null
 
@@ -11,7 +13,7 @@ export async function startDashboardServer(client) {
   if (dashboardServer) return
   const server = createServer(async (request, response) => {
     const send = (status, type, body) => {
-      response.writeHead(status, { "content-type": type, "cache-control": "no-store" })
+      response.writeHead(status, { "content-type": type, "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" })
       response.end(body)
     }
     const url = new URL(request.url || "/", "http://127.0.0.1")
@@ -25,6 +27,17 @@ export async function startDashboardServer(client) {
         send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: catalog, error: null, meta: { generatedAt: new Date().toISOString(), schemaVersion: 2 } }))
       } catch (error) {
         send(500, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: "MODEL_CATALOG_FAILED", message: String(error?.message || error) }, meta: { schemaVersion: 2 } }))
+      }
+      return
+    }
+    if (url.pathname === "/api/actions/session-model/preview" || url.pathname === "/api/actions/session-model/apply") {
+      if (request.method !== "POST" || !validWriteRequest(request, paths.dashboardUrl)) { send(403, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: "WRITE_NOT_AUTHORIZED", message: "A local request token, JSON content type, and same-origin request are required." } })); return }
+      try {
+        const body = await readJsonBody(request)
+        const result = url.pathname.endsWith("/preview") ? await previewSessionModelChange(client, body) : await applySessionModelChange(client, body)
+        send(result.ok ? 200 : 400, "application/json; charset=utf-8", JSON.stringify({ ...result, meta: { generatedAt: new Date().toISOString(), schemaVersion: 2 } }))
+      } catch (error) {
+        send(error.code === "REQUEST_TOO_LARGE" ? 413 : 400, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: error.code || "INVALID_REQUEST", message: String(error?.message || error) } }))
       }
       return
     }
@@ -49,7 +62,7 @@ export async function startDashboardServer(client) {
       return
     }
     if (url.pathname === "/" || url.pathname === "/index.html") {
-      try { send(200, "text/html; charset=utf-8", await readFile(DASHBOARD_HTML, "utf8")) } catch { send(404, "text/plain; charset=utf-8", "Dashboard is not generated yet") }
+      try { send(200, "text/html; charset=utf-8", injectSecurityBootstrap(await readFile(DASHBOARD_HTML, "utf8"))) } catch { send(404, "text/plain; charset=utf-8", "Dashboard is not generated yet") }
       return
     }
     send(404, "text/plain; charset=utf-8", "Not found")

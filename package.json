@@ -16,7 +16,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check src/session-organizer.js && node --check src/config.js && node --check src/text.js && node --check src/storage.js && node --check src/classification.js && node --check src/server.js && node --check src/actions.js && node --check src/reports.js && node --check src/tools.js && node --check src/compat/opencode-v1.js && node --check src/core/audit.js && node --check src/core/pipeline.js && node --check src/usage/extract.js && node --check src/usage/ledger.js && node --check src/usage/aggregate.js && node --check src/models/catalog.js",
+    "check": "node --check src/session-organizer.js && node --check src/config.js && node --check src/text.js && node --check src/storage.js && node --check src/classification.js && node --check src/server.js && node --check src/server/security.js && node --check src/actions.js && node --check src/reports.js && node --check src/tools.js && node --check src/compat/opencode-v1.js && node --check src/core/audit.js && node --check src/core/pipeline.js && node --check src/usage/extract.js && node --check src/usage/ledger.js && node --check src/usage/aggregate.js && node --check src/models/catalog.js && node --check src/models/switcher.js",
     "test": "node --test \"test/**/*.test.js\"",
     "build": "node scripts/build.mjs"
   },

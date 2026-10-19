@@ -55,11 +55,11 @@ function json(value) {
   return `${JSON.stringify(value, null, 2)}
 `;
 }
-async function readJson(file, fallback) {
+async function readJson(file, fallback2) {
   try {
     return JSON.parse(await readFile(file, "utf8"));
   } catch {
-    return fallback;
+    return fallback2;
   }
 }
 async function writeJson(file, value) {
@@ -341,13 +341,104 @@ async function loadModelCatalog(client) {
   return { schemaVersion: 2, updatedAt: null, source: "none", models: [], paths };
 }
 
+// src/models/switcher.js
+import { createHash, randomUUID } from "node:crypto";
+import { appendFile as appendFile3 } from "node:fs/promises";
+var MODEL_ID = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:@+-]+$/;
+var confirmations = /* @__PURE__ */ new Map();
+function hashPayload(payload) {
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+function parseModel(model) {
+  if (typeof model !== "string" || !MODEL_ID.test(model)) return null;
+  const separator = model.indexOf("/");
+  return { providerID: model.slice(0, separator), modelID: model.slice(separator + 1), model };
+}
+function modelFromSession(session) {
+  const value = session?.model || session?.info?.model || session?.currentModel;
+  if (typeof value === "string") return value;
+  const provider = session?.providerID || session?.providerId || session?.info?.providerID;
+  const model = session?.modelID || session?.modelId || session?.info?.modelID;
+  return provider && model ? `${provider}/${model}` : null;
+}
+function fallback(sessionId, model) {
+  return {
+    mode: "command",
+    command: `opencode --session ${sessionId} --model ${model}`,
+    instruction: "\u041E\u0442\u043A\u0440\u043E\u0439\u0442\u0435 \u0447\u0430\u0442 \u0441 \u044D\u0442\u043E\u0439 \u043C\u043E\u0434\u0435\u043B\u044C\u044E \u0438\u043B\u0438 \u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043C\u043E\u0434\u0435\u043B\u044C \u0447\u0435\u0440\u0435\u0437 /models. \u0421\u043C\u0435\u043D\u0430 \u0447\u0435\u0440\u0435\u0437 \u0442\u0435\u043A\u0443\u0449\u0438\u0439 SDK \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u043D\u0430."
+  };
+}
+async function readSession(client, sessionId, directory) {
+  if (typeof client?.session?.get !== "function") return null;
+  return responseData(await client.session.get({ path: { id: sessionId }, query: { directory } }));
+}
+async function previewSessionModelChange(client, { sessionId, directory, model }) {
+  const target = parseModel(model);
+  if (!sessionId || !target) return { ok: false, error: { code: "INVALID_MODEL_ID", message: "Model must use provider/model format." } };
+  const catalog = await loadModelCatalog(client);
+  const known = catalog.models.find((item) => `${item.providerId}/${item.modelId}` === target.model);
+  if (catalog.models.length && !known) return { ok: false, error: { code: "MODEL_NOT_FOUND", message: "Model is not present in the current OpenCode catalog." } };
+  const session = await readSession(client, sessionId, directory);
+  const oldModel = modelFromSession(session);
+  const capability = typeof client?.session?.switchModel === "function" ? "SDK" : "command";
+  const payload = { sessionId, directory: directory || null, oldModel, newModel: target.model, capability };
+  const confirmationId = randomUUID();
+  const payloadHash = hashPayload(payload);
+  confirmations.set(confirmationId, { payloadHash, payload, expiresAt: Date.now() + 5 * 60 * 1e3 });
+  return { ok: true, confirmationId, payloadHash, expiresAt: new Date(Date.now() + 5 * 60 * 1e3).toISOString(), ...payload, mode: capability === "SDK" ? "SDK" : "\u043A\u043E\u043C\u0430\u043D\u0434\u0430", fallback: capability === "SDK" ? null : fallback(sessionId, target.model) };
+}
+async function applySessionModelChange(client, { confirmationId, payloadHash }) {
+  const confirmation = confirmations.get(confirmationId);
+  if (!confirmation || confirmation.expiresAt < Date.now()) return { ok: false, error: { code: "CONFIRMATION_EXPIRED", message: "Preview confirmation is missing or expired." } };
+  if (confirmation.payloadHash !== payloadHash) return { ok: false, error: { code: "PAYLOAD_MISMATCH", message: "Apply payload does not match the preview." } };
+  confirmations.delete(confirmationId);
+  const { sessionId, directory, newModel } = confirmation.payload;
+  const target = parseModel(newModel);
+  if (!target) return { ok: false, error: { code: "INVALID_MODEL_ID", message: "Model must use provider/model format." } };
+  if (typeof client?.session?.switchModel !== "function") return { ok: false, applied: false, fallback: fallback(sessionId, newModel), error: { code: "MODEL_SWITCH_UNSUPPORTED", message: "OpenCode SDK does not expose session model switching." } };
+  try {
+    await client.session.switchModel({ path: { id: sessionId }, query: { directory }, body: { providerID: target.providerID, modelID: target.modelID } });
+    const session = await readSession(client, sessionId, directory);
+    const actualModel = modelFromSession(session);
+    if (actualModel !== newModel) return { ok: false, applied: false, error: { code: "MODEL_SWITCH_UNCONFIRMED", message: "OpenCode did not confirm the requested model after the switch.", actualModel } };
+    await appendFile3(ACTIONS_FILE, `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), action: "model-switch-applied", sessionId, model: newModel })}
+`, "utf8");
+    return { ok: true, applied: true, mode: "SDK", sessionId, model: actualModel };
+  } catch (error) {
+    return { ok: false, applied: false, error: { code: "MODEL_SWITCH_FAILED", message: String(error?.message || error) } };
+  }
+}
+
+// src/server/security.js
+import { randomBytes } from "node:crypto";
+var requestToken = randomBytes(32).toString("hex");
+function validWriteRequest(request, dashboardUrl) {
+  const origin = request.headers.origin;
+  const expectedOrigin = dashboardUrl ? new URL(dashboardUrl).origin : null;
+  return request.headers["x-session-organizer-token"] === requestToken && (!origin || origin === expectedOrigin) && request.headers["content-type"]?.toLowerCase().startsWith("application/json");
+}
+function injectSecurityBootstrap(page) {
+  return page.replace("</head>", `<meta name="session-organizer-request-token" content="${requestToken}"></head>`);
+}
+async function readJsonBody(request, maxBytes = 64 * 1024) {
+  let size = 0;
+  const chunks = [];
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > maxBytes) throw Object.assign(new Error("Request body is too large"), { code: "REQUEST_TOO_LARGE" });
+    chunks.push(chunk);
+  }
+  if (!chunks.length) return {};
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
 // src/server.js
 var dashboardServer = null;
 async function startDashboardServer(client) {
   if (dashboardServer) return;
   const server = createServer(async (request, response) => {
     const send = (status, type, body) => {
-      response.writeHead(status, { "content-type": type, "cache-control": "no-store" });
+      response.writeHead(status, { "content-type": type, "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" });
       response.end(body);
     };
     const url = new URL(request.url || "/", "http://127.0.0.1");
@@ -365,6 +456,20 @@ async function startDashboardServer(client) {
         send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: catalog, error: null, meta: { generatedAt: (/* @__PURE__ */ new Date()).toISOString(), schemaVersion: 2 } }));
       } catch (error) {
         send(500, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: "MODEL_CATALOG_FAILED", message: String(error?.message || error) }, meta: { schemaVersion: 2 } }));
+      }
+      return;
+    }
+    if (url.pathname === "/api/actions/session-model/preview" || url.pathname === "/api/actions/session-model/apply") {
+      if (request.method !== "POST" || !validWriteRequest(request, paths.dashboardUrl)) {
+        send(403, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: "WRITE_NOT_AUTHORIZED", message: "A local request token, JSON content type, and same-origin request are required." } }));
+        return;
+      }
+      try {
+        const body = await readJsonBody(request);
+        const result = url.pathname.endsWith("/preview") ? await previewSessionModelChange(client, body) : await applySessionModelChange(client, body);
+        send(result.ok ? 200 : 400, "application/json; charset=utf-8", JSON.stringify({ ...result, meta: { generatedAt: (/* @__PURE__ */ new Date()).toISOString(), schemaVersion: 2 } }));
+      } catch (error) {
+        send(error.code === "REQUEST_TOO_LARGE" ? 413 : 400, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: error.code || "INVALID_REQUEST", message: String(error?.message || error) } }));
       }
       return;
     }
@@ -393,7 +498,7 @@ async function startDashboardServer(client) {
     }
     if (url.pathname === "/" || url.pathname === "/index.html") {
       try {
-        send(200, "text/html; charset=utf-8", await readFile3(DASHBOARD_HTML, "utf8"));
+        send(200, "text/html; charset=utf-8", injectSecurityBootstrap(await readFile3(DASHBOARD_HTML, "utf8")));
       } catch {
         send(404, "text/plain; charset=utf-8", "Dashboard is not generated yet");
       }
@@ -411,7 +516,7 @@ async function startDashboardServer(client) {
 }
 
 // src/core/pipeline.js
-import { appendFile as appendFile3 } from "node:fs/promises";
+import { appendFile as appendFile4 } from "node:fs/promises";
 import { resolve as resolve3 } from "node:path";
 
 // src/classification.js
@@ -588,8 +693,8 @@ function extractUsage(message, session, capturedAt = (/* @__PURE__ */ new Date()
   const messageId = info.id || message?.id;
   if (!messageId) return null;
   const direct = hasUsage(info) ? usageSource(info) : null;
-  const fallback = direct ? null : mergeParts(message?.parts);
-  const source = direct || fallback;
+  const fallback2 = direct ? null : mergeParts(message?.parts);
+  const source = direct || fallback2;
   if (!source) return null;
   const tokens = normalizeTokens(source.tokens || source);
   const reportedCost = numberOrNull2(source.cost);
@@ -652,7 +757,7 @@ async function runAudit(client, currentDirectory, { writeReports: writeReports3 
   const index = { schemaVersion: 1, protocol: "v1", updatedAt: now(), projects: projects.filter((item) => item?.worktree).map((item) => ({ id: item.id || null, worktree: resolve3(item.worktree), vcs: item.vcs || null })), sessions: records };
   await writeJson(INDEX_FILE, index);
   const report = await writeReports3(index, settings, errors);
-  await appendFile3(ACTIONS_FILE, `${JSON.stringify({ at: now(), action: "audit", mode: "full-dry-run", counts: report.counts, errors: errors.length })}
+  await appendFile4(ACTIONS_FILE, `${JSON.stringify({ at: now(), action: "audit", mode: "full-dry-run", counts: report.counts, errors: errors.length })}
 `, "utf8");
   return { ...report.counts, usage: await upsertUsage(usageRecords), errors, paths };
 }
@@ -701,7 +806,7 @@ ${groupsText}
 import { tool as defineTool } from "@opencode-ai/plugin";
 
 // src/actions.js
-import { appendFile as appendFile4 } from "node:fs/promises";
+import { appendFile as appendFile5 } from "node:fs/promises";
 import { join as join2, relative as relative2, resolve as resolve4 } from "node:path";
 function now2() {
   return (/* @__PURE__ */ new Date()).toISOString();
@@ -748,7 +853,7 @@ async function applyRenames(client, currentDirectory, args, writeReports3) {
       record.currentTitle = sanitize(updated?.title || record.proposedTitle, 160);
       record.manualTitlePreservation = false;
       results.push({ id: record.id, result: "renamed", title: record.currentTitle, backup });
-      await appendFile4(ACTIONS_FILE, `${JSON.stringify({ at: now2(), action: "rename", id: record.id, backup })}
+      await appendFile5(ACTIONS_FILE, `${JSON.stringify({ at: now2(), action: "rename", id: record.id, backup })}
 `, "utf8");
     } catch (error) {
       results.push({ id: record.id, result: "failed", error: safeError(error), backup });
@@ -785,7 +890,7 @@ async function undoRenames(client, currentDirectory, args, writeReports3) {
         index.sessions[before.id].proposedTitle = before.currentTitle;
       }
       results.push({ file, id: before.id, result: "restored", title: before.currentTitle });
-      await appendFile4(ACTIONS_FILE, `${JSON.stringify({ at: now2(), action: "undo-rename", id: before.id, backup: file })}
+      await appendFile5(ACTIONS_FILE, `${JSON.stringify({ at: now2(), action: "undo-rename", id: before.id, backup: file })}
 `, "utf8");
     } catch (error) {
       results.push({ file, id: before.id, result: "failed", error: safeError(error) });
