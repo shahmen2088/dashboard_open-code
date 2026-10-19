@@ -287,6 +287,22 @@ function scriptJson(value) {
   return JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026")
 }
 
+function polishDashboard(page) {
+  return page.replace("</style></head>", `<style>
+button{font:inherit;cursor:pointer;transition:background .18s ease,border-color .18s ease,transform .18s ease}
+#refresh{border:1px solid #35506a;border-radius:10px;background:linear-gradient(135deg,#1b3448,#172637);color:#edf4fa;padding:11px 15px;box-shadow:0 10px 24px rgba(0,0,0,.18)}
+#refresh:hover{border-color:#69d2a7;background:#163b34;transform:translateY(-1px)}
+.project-card strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.project-card span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.toolbar button,.actions button{border-color:#35506a;color:#dfeefa}
+.toolbar button:hover,.actions button:hover{border-color:#69d2a7;background:#163b34}
+.table{box-shadow:0 18px 45px rgba(0,0,0,.16)}
+.detail{box-shadow:0 18px 45px rgba(0,0,0,.16)}
+@media(max-width:980px){.layout{grid-template-columns:1fr}.detail{min-height:260px}.top{align-items:flex-start}.top button{flex:0 0 auto}}
+@media(max-width:620px){.shell{padding:20px 14px 36px}.top{display:block}.top button{margin-top:16px;width:100%}.stat{flex:1 1 42%}.toolbar input,.toolbar select,.toolbar button{width:100%;flex-basis:100%}.project-card{min-width:calc(100vw - 52px)}}
+</style></head>`)
+}
+
 async function writeDashboardLegacy(report) {
   const data = { generatedAt: report.generatedAt, counts: report.counts, sessions: report.sessions }
   const htmlPage = String.raw`<!doctype html>
@@ -301,7 +317,7 @@ function render(){const list=filtered();$("stats").innerHTML=[[DATA.counts.sessi
 function show(id){const x=DATA.sessions.find(item=>item.id===id);if(!x)return;state.selected=id;const fav=mark("favorites",id),arch=mark("archived",id);$("detail").innerHTML="<h2>"+esc(x.currentTitle||"Untitled")+"</h2><p class=badge>"+esc(x.topic)+" · "+esc(status(x))+"</p><p>"+esc(x.shortSummary)+"</p><p class=muted>"+esc(x.directory||x.projectDirectory||"")+"</p><h3>Latest messages</h3>"+(x.previewMessages||[]).map(m=>"<div class=message><small>"+esc(m.role)+"</small><br>"+esc(m.text)+"</div>").join("")+"<p><button id=fav>"+(fav?"Remove favorite":"Add favorite")+"</button> <button id=arc>"+(arch?"Unarchive":"Archive")+"</button></p><p class=muted>Session ID: "+esc(x.id)+"</p>";$("fav").onclick=()=>{state.favorites=fav?state.favorites.filter(v=>v!==id):[...state.favorites,id];save();render();show(id)};$("arc").onclick=()=>{state.archived=arch?state.archived.filter(v=>v!==id):[...state.archived,id];save();render();show(id)}}
 ["search","topic","status","scope"].forEach(id=>$(id).oninput=()=>{state[id==="search"?"query":id]=$(id).value;render()});$("sort").onclick=()=>{state.sort=state.sort==="updated"?"title":"updated";render()};$("refresh").onclick=()=>location.reload();$("generated").textContent=date(new Date(DATA.generatedAt).getTime());[...new Set(DATA.sessions.map(x=>x.topic))].sort().forEach(v=>$("topic").insertAdjacentHTML("beforeend","<option>"+esc(v)+"</option>"));[...new Set(DATA.sessions.map(status))].sort().forEach(v=>$("status").insertAdjacentHTML("beforeend","<option>"+esc(v)+"</option>"));render();setInterval(()=>fetch("/api/report",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(x=>x&&x.generatedAt!==DATA.generatedAt&&location.reload()).catch(()=>{}),5000);
 </script></body></html>`
-  await writeFile(DASHBOARD_HTML, htmlPage, "utf8")
+  await writeFile(DASHBOARD_HTML, polishDashboard(htmlPage), "utf8")
 }
 
 async function writeDashboard(report) {
@@ -334,7 +350,7 @@ function renderRows(){const list=filtered();$("rows").innerHTML=list.length?list
 function show(id){const x=DATA.sessions.find(item=>item.id===id);if(!x)return;state.selected=id;const fav=marked("favorites",id),arch=marked("archived",id);$("detail").innerHTML="<h2>"+esc(x.currentTitle||"Без названия")+"</h2><p class=badge>"+esc(project(x))+" · "+esc(x.topic)+" · "+esc(status(x))+"</p><p>"+esc(x.shortSummary)+"</p><h3>Как открыть этот чат в OpenCode</h3><ol><li>Откройте терминал в проекте: <code>"+esc(x.directory||x.projectDirectory||"нет каталога")+"</code>.</li><li>Выполните команду для вашей системы.</li><li>Если OpenCode уже открыт, найдите проект и сравните ID чата.</li></ol><p class=muted>Windows</p><code class=command>"+esc(x.windowsCommand)+"</code><p><button id=copywin>Скопировать Windows-команду</button></p><p class=muted>macOS / Linux</p><code class=command>"+esc(x.unixCommand)+"</code><p><button id=copyunix>Скопировать Unix-команду</button></p><p class=muted>ID чата: "+esc(x.id)+"</p><div class=actions><button id=fav>"+(fav?"Убрать из избранного":"В избранное")+"</button><button id=arc>"+(arch?"Вернуть из архива":"В архив")+"</button></div><h3>Последние сообщения</h3>"+(x.previewMessages||[]).map(m=>"<div class=message><small>"+esc(m.role)+"</small><br>"+esc(m.text)+"</div>").join("");$("copywin").onclick=()=>navigator.clipboard&&navigator.clipboard.writeText(x.windowsCommand);$("copyunix").onclick=()=>navigator.clipboard&&navigator.clipboard.writeText(x.unixCommand);$("fav").onclick=()=>{state.favorites=fav?state.favorites.filter(v=>v!==id):[...state.favorites,id];save();render();show(id)};$("arc").onclick=()=>{state.archived=arch?state.archived.filter(v=>v!==id):[...state.archived,id];save();render();show(id)}}
 function render(){renderStats();renderProjects();renderRows()}["search","topic","status","project","scope"].forEach(id=>$(id).oninput=()=>{state[id==="search"?"query":id]=$(id).value;renderRows()});$("sort").onclick=()=>{state.sort=state.sort==="updated"?"title":state.sort==="title"?"project":"updated";$("sort").textContent=state.sort==="updated"?"Сначала новые":state.sort==="title"?"По названию":"По проекту";renderRows()};$("refresh").onclick=()=>location.reload();$("generated").textContent=date(new Date(DATA.generatedAt).getTime());[...new Set(DATA.sessions.map(x=>x.topic))].sort().forEach(v=>$("topic").insertAdjacentHTML("beforeend","<option>"+esc(v)+"</option>"));[...new Set(DATA.sessions.map(status))].sort().forEach(v=>$("status").insertAdjacentHTML("beforeend","<option>"+esc(v)+"</option>"));[...new Set(DATA.sessions.map(project))].sort((a,b)=>a.localeCompare(b,"ru")).forEach(v=>$("project").insertAdjacentHTML("beforeend","<option>"+esc(v)+"</option>"));render();setInterval(()=>fetch("/api/report",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(x=>x&&x.generatedAt!==DATA.generatedAt&&location.reload()).catch(()=>{}),5000);
 </script></body></html>`
-  await writeFile(DASHBOARD_HTML, htmlPage, "utf8")
+  await writeFile(DASHBOARD_HTML, polishDashboard(htmlPage), "utf8")
 }
 
 async function writeReports(index, settings, errors = []) {
