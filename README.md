@@ -40,8 +40,6 @@ Restart OpenCode after installation and run the `session_organizer_audit` tool. 
 
 The dashboard searches chat title, chat description, project path, and chat ID. Select a project first when working with a large workspace. Each chat detail panel shows a Windows command and a macOS/Linux command in the form `opencode -s <chat-id>`, plus the exact project directory and step-by-step instructions for opening the chat.
 
-The same index is available through six local views: `Карта`, `Таблица`, `Канбан`, `Хронология`, `Связи`, and `Техника`. The selected view is stored only in browser `localStorage`; switching views does not modify sessions or projects.
-
 ## Local Storage
 
 Default storage:
@@ -82,7 +80,6 @@ Use `ignoredSessionIds` and `ignoredProjectDirectories` to exclude local records
 ## Tools
 
 - `session_organizer_audit` - build a full local snapshot and regenerate the dashboard;
-- `session_organizer_dashboard_reload` - regenerate the local dashboard without restarting OpenCode;
 - `session_organizer_status` - show local paths, settings, and index size;
 - `session_organizer_diagnose` - check SDK reachability and dashboard availability;
 - `session_organizer_override` - save local metadata after `confirm=true`;
@@ -96,5 +93,3 @@ npm run check
 ```
 
 The repository intentionally has no runtime dependency installation step. OpenCode supplies the plugin API when it loads the installed plugin.
-
-The dashboard also exposes a localhost-only `GET`/`POST /api/reload` endpoint. It refreshes the current read-only snapshot and dashboard without restarting OpenCode. Changing the plugin source itself still requires a restart because OpenCode loads plugin modules once per process.
