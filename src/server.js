@@ -1,11 +1,15 @@
-import { readFile } from "node:fs/promises"
+import { appendFile, readFile } from "node:fs/promises"
 import { createServer } from "node:http"
-import { AUDIT_JSON, DASHBOARD_HTML, paths } from "./config.js"
+import { ACTIONS_FILE, AUDIT_JSON, DASHBOARD_HTML, paths, SETTINGS_FILE } from "./config.js"
+import { loadIndex, loadSettings, writeJson } from "./storage.js"
 import { aggregateUsage, usageCsv } from "./usage/aggregate.js"
 import { loadUsageIndex, loadUsageRecords } from "./usage/ledger.js"
 import { loadModelCatalog } from "./models/catalog.js"
 import { applySessionModelChange, previewSessionModelChange } from "./models/switcher.js"
+import { applyDefaultModelChange, previewDefaultModelChange } from "./models/default.js"
 import { injectSecurityBootstrap, readJsonBody, validWriteRequest } from "./server/security.js"
+import { budgetStatus } from "./usage/budgets.js"
+import { readJournal } from "./journal.js"
 
 let dashboardServer = null
 
@@ -21,6 +25,41 @@ export async function startDashboardServer(client) {
       try { send(200, "application/json; charset=utf-8", await readFile(AUDIT_JSON, "utf8")) } catch { send(404, "application/json; charset=utf-8", JSON.stringify({ error: "Audit has not been generated yet" })) }
       return
     }
+    if (url.pathname === "/api/health") {
+      send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: { protocol: "v1", server: true, dashboardUrl: paths.dashboardUrl }, error: null, meta: { generatedAt: new Date().toISOString(), schemaVersion: 2 } }))
+      return
+    }
+    if (url.pathname === "/api/settings" && request.method === "GET") {
+      send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: await loadSettings(), error: null, meta: { generatedAt: new Date().toISOString(), schemaVersion: 2 } }))
+      return
+    }
+    if (url.pathname === "/api/settings" && request.method === "PATCH") {
+      if (!validWriteRequest(request, paths.dashboardUrl)) { send(403, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: "WRITE_NOT_AUTHORIZED", message: "A local request token, JSON content type, and same-origin request are required." } })); return }
+      try {
+        const patch = await readJsonBody(request)
+        const allowed = ["dashboard", "usage", "budgets", "modelSwitching", "security"]
+        if (!patch || Object.keys(patch).some((key) => !allowed.includes(key))) throw Object.assign(new Error("Only supported settings sections may be changed"), { code: "INVALID_SETTINGS" })
+        const current = await loadSettings()
+        const next = { ...current }
+        for (const key of allowed) if (patch[key] !== undefined) next[key] = { ...current[key], ...patch[key] }
+        await writeJson(SETTINGS_FILE, next)
+        await appendFile(ACTIONS_FILE, `${JSON.stringify({ at: new Date().toISOString(), action: "settings-updated", sections: Object.keys(patch) })}\n`, "utf8")
+        send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: next, error: null, meta: { generatedAt: new Date().toISOString(), schemaVersion: 2 } }))
+      } catch (error) {
+        send(error.code === "REQUEST_TOO_LARGE" ? 413 : 400, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: error.code || "INVALID_SETTINGS", message: String(error?.message || error) } }))
+      }
+      return
+    }
+    if (url.pathname === "/api/journal") {
+      send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: await readJournal({ skip: url.searchParams.get("skip"), limit: url.searchParams.get("limit") }), error: null, meta: { generatedAt: new Date().toISOString(), schemaVersion: 2 } }))
+      return
+    }
+    if (url.pathname === "/api/dashboard") {
+      const [index, settings, usageRecords] = await Promise.all([loadIndex(), loadSettings(), loadUsageRecords()])
+      const records = [...usageRecords.values()]
+      send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: { activeChats: Object.values(index.sessions).filter((item) => item.status?.type !== "idle").length, sessions: Object.keys(index.sessions).length, budgets: budgetStatus(records, settings.budgets, settings.usage.timezone), usage: (await loadUsageIndex()).totals }, error: null, meta: { generatedAt: new Date().toISOString(), schemaVersion: 2 } }))
+      return
+    }
     if (url.pathname === "/api/models") {
       try {
         const catalog = await loadModelCatalog(client)
@@ -30,11 +69,14 @@ export async function startDashboardServer(client) {
       }
       return
     }
-    if (url.pathname === "/api/actions/session-model/preview" || url.pathname === "/api/actions/session-model/apply") {
+    if (url.pathname === "/api/actions/session-model/preview" || url.pathname === "/api/actions/session-model/apply" || url.pathname === "/api/actions/default-model/preview" || url.pathname === "/api/actions/default-model/apply") {
       if (request.method !== "POST" || !validWriteRequest(request, paths.dashboardUrl)) { send(403, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: "WRITE_NOT_AUTHORIZED", message: "A local request token, JSON content type, and same-origin request are required." } })); return }
       try {
         const body = await readJsonBody(request)
-        const result = url.pathname.endsWith("/preview") ? await previewSessionModelChange(client, body) : await applySessionModelChange(client, body)
+        const defaultModel = url.pathname.includes("default-model")
+        const result = url.pathname.endsWith("/preview")
+          ? (defaultModel ? await previewDefaultModelChange(body) : await previewSessionModelChange(client, body))
+          : (defaultModel ? await applyDefaultModelChange(body) : await applySessionModelChange(client, body))
         send(result.ok ? 200 : 400, "application/json; charset=utf-8", JSON.stringify({ ...result, meta: { generatedAt: new Date().toISOString(), schemaVersion: 2 } }))
       } catch (error) {
         send(error.code === "REQUEST_TOO_LARGE" ? 413 : 400, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: error.code || "INVALID_REQUEST", message: String(error?.message || error) } }))

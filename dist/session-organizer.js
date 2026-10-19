@@ -18,7 +18,7 @@ var USAGE_LEDGER = join(STORE, "usage-ledger.jsonl");
 var USAGE_INDEX = join(STORE, "usage-index.json");
 var MODELS_FILE = join(STORE, "models.json");
 var DEFAULT_SETTINGS = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   autoRename: false,
   autoMove: false,
   messagesLimit: 120,
@@ -30,7 +30,12 @@ var DEFAULT_SETTINGS = {
   debounceMs: 1500,
   ignoredSessionIds: [],
   ignoredProjectDirectories: [],
-  manualOverrides: {}
+  manualOverrides: {},
+  dashboard: { language: "ru", currency: "USD", refreshSeconds: 5 },
+  usage: { enabled: true, retentionDays: 365, timezone: "Europe/Moscow", pricingOverrides: {} },
+  budgets: { daily: null, weekly: null, monthly: null, warningThresholds: [0.7, 0.9, 1], hardStop: false },
+  modelSwitching: { enabled: true, allowDefaultConfigWrite: false, requireConfirmation: true },
+  security: { requireRequestToken: true }
 };
 var paths = {
   store: STORE,
@@ -75,9 +80,20 @@ async function ensureStorage() {
 }
 async function loadSettings() {
   const current = await readJson(SETTINGS_FILE, {});
+  const currentUsage = current.usage && typeof current.usage === "object" ? current.usage : {};
+  const currentBudgets = current.budgets && typeof current.budgets === "object" ? current.budgets : {};
+  const currentDashboard = current.dashboard && typeof current.dashboard === "object" ? current.dashboard : {};
+  const currentSwitching = current.modelSwitching && typeof current.modelSwitching === "object" ? current.modelSwitching : {};
+  const currentSecurity = current.security && typeof current.security === "object" ? current.security : {};
   const settings = {
     ...DEFAULT_SETTINGS,
     ...current,
+    schemaVersion: 2,
+    dashboard: { ...DEFAULT_SETTINGS.dashboard, ...currentDashboard },
+    usage: { ...DEFAULT_SETTINGS.usage, ...currentUsage, pricingOverrides: currentUsage.pricingOverrides && typeof currentUsage.pricingOverrides === "object" ? currentUsage.pricingOverrides : {} },
+    budgets: { ...DEFAULT_SETTINGS.budgets, ...currentBudgets, warningThresholds: Array.isArray(currentBudgets.warningThresholds) ? currentBudgets.warningThresholds : DEFAULT_SETTINGS.budgets.warningThresholds },
+    modelSwitching: { ...DEFAULT_SETTINGS.modelSwitching, ...currentSwitching },
+    security: { ...DEFAULT_SETTINGS.security, ...currentSecurity },
     ignoredSessionIds: Array.isArray(current.ignoredSessionIds) ? current.ignoredSessionIds : [],
     ignoredProjectDirectories: Array.isArray(current.ignoredProjectDirectories) ? current.ignoredProjectDirectories : [],
     manualOverrides: current.manualOverrides && typeof current.manualOverrides === "object" ? current.manualOverrides : {}
@@ -122,7 +138,7 @@ function boundedText(value, budget, limit) {
 }
 
 // src/server.js
-import { readFile as readFile3 } from "node:fs/promises";
+import { appendFile as appendFile5, readFile as readFile5 } from "node:fs/promises";
 import { createServer } from "node:http";
 
 // src/usage/aggregate.js
@@ -409,6 +425,69 @@ async function applySessionModelChange(client, { confirmationId, payloadHash }) 
   }
 }
 
+// src/models/default.js
+import { appendFile as appendFile4, readFile as readFile3 } from "node:fs/promises";
+import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
+import { homedir as homedir2 } from "node:os";
+import { join as join2, resolve as resolve2 } from "node:path";
+var MODEL_ID2 = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:@+-]+$/;
+var confirmations2 = /* @__PURE__ */ new Map();
+function hash(value) {
+  return createHash2("sha256").update(value).digest("hex");
+}
+function targetPath(scope, directory) {
+  if (scope === "project") return join2(resolve2(directory || process.cwd()), "opencode.json");
+  const configDir = process.env.OPENCODE_CONFIG_DIR || join2(homedir2(), ".config", "opencode");
+  return join2(configDir, "opencode.json");
+}
+async function readConfig(file) {
+  let text = "{}";
+  try {
+    text = await readFile3(file, "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  if (/\/\*|\/\/|,\s*[}\]]/.test(text)) return { unsupported: true, text };
+  try {
+    return { value: JSON.parse(text), text };
+  } catch {
+    return { unsupported: true, text };
+  }
+}
+async function previewDefaultModelChange({ model, scope = "global", directory }) {
+  if (!MODEL_ID2.test(String(model || ""))) return { ok: false, error: { code: "INVALID_MODEL_ID", message: "Model must use provider/model format." } };
+  if (!["global", "project"].includes(scope)) return { ok: false, error: { code: "INVALID_SCOPE", message: "Scope must be global or project." } };
+  const file = targetPath(scope, directory);
+  const config = await readConfig(file);
+  if (config.unsupported) return { ok: false, error: { code: "JSONC_UNSUPPORTED", message: "This configuration contains JSONC syntax; preview only is available until a JSONC-preserving writer is used.", path: file } };
+  const value = config.value && typeof config.value === "object" ? config.value : {};
+  const oldModel = typeof value.model === "string" ? value.model : null;
+  const next = { ...value, model };
+  const payload = { file, scope, directory: directory || null, oldModel, newModel: model, beforeHash: hash(config.text), next };
+  const confirmationId = randomUUID2();
+  const payloadHash = hash(JSON.stringify(payload));
+  confirmations2.set(confirmationId, { payloadHash, payload, expiresAt: Date.now() + 5 * 60 * 1e3 });
+  const settings = await loadSettings();
+  return { ok: true, confirmationId, payloadHash, expiresAt: new Date(Date.now() + 5 * 60 * 1e3).toISOString(), path: file, scope, oldModel, newModel: model, canApply: settings.modelSwitching.allowDefaultConfigWrite === true, diff: { model: { from: oldModel, to: model } } };
+}
+async function applyDefaultModelChange({ confirmationId, payloadHash }) {
+  const confirmation = confirmations2.get(confirmationId);
+  if (!confirmation || confirmation.expiresAt < Date.now()) return { ok: false, error: { code: "CONFIRMATION_EXPIRED", message: "Preview confirmation is missing or expired." } };
+  if (confirmation.payloadHash !== payloadHash) return { ok: false, error: { code: "PAYLOAD_MISMATCH", message: "Apply payload does not match the preview." } };
+  confirmations2.delete(confirmationId);
+  const settings = await loadSettings();
+  if (settings.modelSwitching.allowDefaultConfigWrite !== true) return { ok: false, applied: false, error: { code: "DEFAULT_MODEL_WRITE_DISABLED", message: "Default model writes are disabled in settings." } };
+  const { file, beforeHash, next } = confirmation.payload;
+  const current = await readConfig(file);
+  if (current.unsupported || hash(current.text) !== beforeHash) return { ok: false, applied: false, error: { code: "CONFIG_CONFLICT", message: "Configuration changed after preview; no write performed." } };
+  const backup = join2(BACKUPS, `default-model-${Date.now()}.json`);
+  await writeJson(backup, { type: "default-model-backup", path: file, content: current.value, createdAt: (/* @__PURE__ */ new Date()).toISOString() });
+  await writeJson(file, next);
+  await appendFile4(ACTIONS_FILE, `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), action: "default-model-updated", path: file, backup, model: next.model })}
+`, "utf8");
+  return { ok: true, applied: true, path: file, backup, model: next.model };
+}
+
 // src/server/security.js
 import { randomBytes } from "node:crypto";
 var requestToken = randomBytes(32).toString("hex");
@@ -432,6 +511,76 @@ async function readJsonBody(request, maxBytes = 64 * 1024) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+// src/usage/budgets.js
+function parts(date, timezone) {
+  const values = new Intl.DateTimeFormat("en-US", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit", weekday: "short" }).formatToParts(date);
+  return Object.fromEntries(values.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+}
+function dateKey(date, timezone) {
+  const value = parts(date, timezone);
+  return `${value.year}-${value.month}-${value.day}`;
+}
+function monthKey(date, timezone) {
+  const value = parts(date, timezone);
+  return `${value.year}-${value.month}`;
+}
+function weekKey(date, timezone) {
+  const value = parts(date, timezone);
+  const current = /* @__PURE__ */ new Date(`${value.year}-${value.month}-${value.day}T00:00:00Z`);
+  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(value.weekday);
+  current.setUTCDate(current.getUTCDate() - (weekday === 0 ? 6 : weekday - 1));
+  return current.toISOString().slice(0, 10);
+}
+function matches(record, period, now4, timezone) {
+  const date = new Date(record.completedAt || record.capturedAt || 0);
+  if (period === "daily") return dateKey(date, timezone) === dateKey(now4, timezone);
+  if (period === "weekly") return weekKey(date, timezone) === weekKey(now4, timezone);
+  return monthKey(date, timezone) === monthKey(now4, timezone);
+}
+function budgetStatus(records, budgets = {}, timezone = "Europe/Moscow", now4 = /* @__PURE__ */ new Date()) {
+  return ["daily", "weekly", "monthly"].map((period) => {
+    const limit = typeof budgets[period] === "number" && Number.isFinite(budgets[period]) && budgets[period] >= 0 ? budgets[period] : null;
+    const selected = records.filter((record) => matches(record, period, now4, timezone));
+    const amount = selected.reduce((sum, record) => sum + (typeof record.cost === "number" ? record.cost : 0), 0);
+    const unknownCost = selected.filter((record) => record.cost === null || record.cost === void 0).length;
+    const ratio = limit && limit > 0 ? amount / limit : null;
+    const thresholds = Array.isArray(budgets.warningThresholds) ? budgets.warningThresholds.filter((value) => typeof value === "number").sort((a, b) => a - b) : [0.7, 0.9, 1];
+    return { period, limit, amount, remaining: limit === null ? null : Math.max(0, limit - amount), ratio, unknownCost, warningAt: ratio === null ? null : thresholds.filter((threshold) => ratio >= threshold).at(-1) || null, hardStop: Boolean(budgets.hardStop) };
+  });
+}
+
+// src/journal.js
+import { readFile as readFile4 } from "node:fs/promises";
+async function readJournal({ skip = 0, limit = 100 } = {}) {
+  let text = "";
+  try {
+    text = await readFile4(ACTIONS_FILE, "utf8");
+  } catch {
+    return { items: [], total: 0 };
+  }
+  const items = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const item = JSON.parse(line);
+      items.push({
+        at: item.at || null,
+        action: sanitize(item.action, 80),
+        id: sanitize(item.id, 160),
+        sessionId: sanitize(item.sessionId, 160),
+        model: sanitize(item.model, 160),
+        result: sanitize(item.result, 80),
+        errors: Number(item.errors) || 0,
+        counts: item.counts || null
+      });
+    } catch {
+      items.push({ at: null, action: "invalid-entry", errors: 1 });
+    }
+  }
+  items.reverse();
+  return { items: items.slice(Number(skip) || 0, (Number(skip) || 0) + Math.min(Number(limit) || 100, 500)), total: items.length };
+}
+
 // src/server.js
 var dashboardServer = null;
 async function startDashboardServer(client) {
@@ -444,10 +593,49 @@ async function startDashboardServer(client) {
     const url = new URL(request.url || "/", "http://127.0.0.1");
     if (url.pathname === "/api/report") {
       try {
-        send(200, "application/json; charset=utf-8", await readFile3(AUDIT_JSON, "utf8"));
+        send(200, "application/json; charset=utf-8", await readFile5(AUDIT_JSON, "utf8"));
       } catch {
         send(404, "application/json; charset=utf-8", JSON.stringify({ error: "Audit has not been generated yet" }));
       }
+      return;
+    }
+    if (url.pathname === "/api/health") {
+      send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: { protocol: "v1", server: true, dashboardUrl: paths.dashboardUrl }, error: null, meta: { generatedAt: (/* @__PURE__ */ new Date()).toISOString(), schemaVersion: 2 } }));
+      return;
+    }
+    if (url.pathname === "/api/settings" && request.method === "GET") {
+      send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: await loadSettings(), error: null, meta: { generatedAt: (/* @__PURE__ */ new Date()).toISOString(), schemaVersion: 2 } }));
+      return;
+    }
+    if (url.pathname === "/api/settings" && request.method === "PATCH") {
+      if (!validWriteRequest(request, paths.dashboardUrl)) {
+        send(403, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: "WRITE_NOT_AUTHORIZED", message: "A local request token, JSON content type, and same-origin request are required." } }));
+        return;
+      }
+      try {
+        const patch = await readJsonBody(request);
+        const allowed = ["dashboard", "usage", "budgets", "modelSwitching", "security"];
+        if (!patch || Object.keys(patch).some((key) => !allowed.includes(key))) throw Object.assign(new Error("Only supported settings sections may be changed"), { code: "INVALID_SETTINGS" });
+        const current = await loadSettings();
+        const next = { ...current };
+        for (const key of allowed) if (patch[key] !== void 0) next[key] = { ...current[key], ...patch[key] };
+        await writeJson(SETTINGS_FILE, next);
+        await appendFile5(ACTIONS_FILE, `${JSON.stringify({ at: (/* @__PURE__ */ new Date()).toISOString(), action: "settings-updated", sections: Object.keys(patch) })}
+`, "utf8");
+        send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: next, error: null, meta: { generatedAt: (/* @__PURE__ */ new Date()).toISOString(), schemaVersion: 2 } }));
+      } catch (error) {
+        send(error.code === "REQUEST_TOO_LARGE" ? 413 : 400, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: error.code || "INVALID_SETTINGS", message: String(error?.message || error) } }));
+      }
+      return;
+    }
+    if (url.pathname === "/api/journal") {
+      send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: await readJournal({ skip: url.searchParams.get("skip"), limit: url.searchParams.get("limit") }), error: null, meta: { generatedAt: (/* @__PURE__ */ new Date()).toISOString(), schemaVersion: 2 } }));
+      return;
+    }
+    if (url.pathname === "/api/dashboard") {
+      const [index, settings, usageRecords] = await Promise.all([loadIndex(), loadSettings(), loadUsageRecords()]);
+      const records = [...usageRecords.values()];
+      send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: { activeChats: Object.values(index.sessions).filter((item) => item.status?.type !== "idle").length, sessions: Object.keys(index.sessions).length, budgets: budgetStatus(records, settings.budgets, settings.usage.timezone), usage: (await loadUsageIndex()).totals }, error: null, meta: { generatedAt: (/* @__PURE__ */ new Date()).toISOString(), schemaVersion: 2 } }));
       return;
     }
     if (url.pathname === "/api/models") {
@@ -459,14 +647,15 @@ async function startDashboardServer(client) {
       }
       return;
     }
-    if (url.pathname === "/api/actions/session-model/preview" || url.pathname === "/api/actions/session-model/apply") {
+    if (url.pathname === "/api/actions/session-model/preview" || url.pathname === "/api/actions/session-model/apply" || url.pathname === "/api/actions/default-model/preview" || url.pathname === "/api/actions/default-model/apply") {
       if (request.method !== "POST" || !validWriteRequest(request, paths.dashboardUrl)) {
         send(403, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: "WRITE_NOT_AUTHORIZED", message: "A local request token, JSON content type, and same-origin request are required." } }));
         return;
       }
       try {
         const body = await readJsonBody(request);
-        const result = url.pathname.endsWith("/preview") ? await previewSessionModelChange(client, body) : await applySessionModelChange(client, body);
+        const defaultModel = url.pathname.includes("default-model");
+        const result = url.pathname.endsWith("/preview") ? defaultModel ? await previewDefaultModelChange(body) : await previewSessionModelChange(client, body) : defaultModel ? await applyDefaultModelChange(body) : await applySessionModelChange(client, body);
         send(result.ok ? 200 : 400, "application/json; charset=utf-8", JSON.stringify({ ...result, meta: { generatedAt: (/* @__PURE__ */ new Date()).toISOString(), schemaVersion: 2 } }));
       } catch (error) {
         send(error.code === "REQUEST_TOO_LARGE" ? 413 : 400, "application/json; charset=utf-8", JSON.stringify({ ok: false, data: null, error: { code: error.code || "INVALID_REQUEST", message: String(error?.message || error) } }));
@@ -498,7 +687,7 @@ async function startDashboardServer(client) {
     }
     if (url.pathname === "/" || url.pathname === "/index.html") {
       try {
-        send(200, "text/html; charset=utf-8", injectSecurityBootstrap(await readFile3(DASHBOARD_HTML, "utf8")));
+        send(200, "text/html; charset=utf-8", injectSecurityBootstrap(await readFile5(DASHBOARD_HTML, "utf8")));
       } catch {
         send(404, "text/plain; charset=utf-8", "Dashboard is not generated yet");
       }
@@ -516,11 +705,11 @@ async function startDashboardServer(client) {
 }
 
 // src/core/pipeline.js
-import { appendFile as appendFile4 } from "node:fs/promises";
-import { resolve as resolve3 } from "node:path";
+import { appendFile as appendFile6 } from "node:fs/promises";
+import { resolve as resolve4 } from "node:path";
 
 // src/classification.js
-import { relative, resolve as resolve2 } from "node:path";
+import { relative, resolve as resolve3 } from "node:path";
 var TOPIC_RULES = [
   ["bug-fix", /(error|bug|fix|failure|exception|broken|ошиб|баг|исправ)/i],
   ["planning", /(plan|planning|roadmap|task|todo|план|задач|срок)/i],
@@ -537,13 +726,13 @@ function topicLabel(topic) {
   return topic.replace(/(^|-)([a-z])/g, (_, prefix, letter) => `${prefix}${letter.toUpperCase()}`);
 }
 function projectFor(directory, projects) {
-  const target = resolve2(directory || process.cwd());
-  const matches = projects.filter((project) => project && project.worktree).map((project) => ({ project, worktree: resolve2(project.worktree) })).filter(({ worktree }) => {
+  const target = resolve3(directory || process.cwd());
+  const matches2 = projects.filter((project) => project && project.worktree).map((project) => ({ project, worktree: resolve3(project.worktree) })).filter(({ worktree }) => {
     const value = relative(worktree, target);
     return value === "" || !value.startsWith("..") && !value.includes(":");
   }).sort((a, b) => b.worktree.length - a.worktree.length);
-  if (!matches.length) return { id: null, directory: target, match: "unmatched" };
-  const selected = matches[0];
+  if (!matches2.length) return { id: null, directory: target, match: "unmatched" };
+  const selected = matches2[0];
   if (selected.project.id === "global") return { id: null, directory: target, match: "exact" };
   return {
     id: selected.project.id || null,
@@ -672,8 +861,8 @@ function hasUsage(value) {
 function usageSource(value) {
   return value?.usage && typeof value.usage === "object" ? value.usage : value || {};
 }
-function mergeParts(parts) {
-  const candidates = (Array.isArray(parts) ? parts : []).filter((part) => part?.type === "step-finish" && hasUsage(part));
+function mergeParts(parts2) {
+  const candidates = (Array.isArray(parts2) ? parts2 : []).filter((part) => part?.type === "step-finish" && hasUsage(part));
   if (!candidates.length) return null;
   const merged = { tokens: {}, cost: null, providerID: null, modelID: null, variant: null };
   for (const part of candidates) {
@@ -733,7 +922,7 @@ async function runAudit(client, currentDirectory, { writeReports: writeReports3 
   const errors = [];
   const projectsResult = await call("client.project.list", () => client.project.list(), errors);
   const projects = Array.isArray(projectsResult) ? projectsResult : [];
-  const directories = [...new Set([currentDirectory, ...projects.map((item) => item?.worktree)].filter(Boolean).map((item) => resolve3(item)))];
+  const directories = [...new Set([currentDirectory, ...projects.map((item) => item?.worktree)].filter(Boolean).map((item) => resolve4(item)))];
   const roots = [];
   for (const directory of directories) {
     const sessions2 = await call(`client.session.list:${directory}`, () => client.session.list({ query: { directory } }), errors);
@@ -742,7 +931,7 @@ async function runAudit(client, currentDirectory, { writeReports: writeReports3 
   const sessions = await collectTree(client, roots, errors);
   const statuses = {};
   const usageRecords = [];
-  for (const directory of [...new Set(sessions.map((item) => item.directory).filter(Boolean).map((item) => resolve3(item)))]) {
+  for (const directory of [...new Set(sessions.map((item) => item.directory).filter(Boolean).map((item) => resolve4(item)))]) {
     const result = await call(`client.session.status:${directory}`, () => client.session.status({ query: { directory } }), errors);
     if (result && typeof result === "object") Object.assign(statuses, result);
   }
@@ -754,10 +943,10 @@ async function runAudit(client, currentDirectory, { writeReports: writeReports3 
     usageRecords.push(...extractMessageUsage(safeMessages, { ...session, projectId: records[session.id].projectId, projectDirectory: records[session.id].projectDirectory }, now()));
   }
   updateDuplicates(records);
-  const index = { schemaVersion: 1, protocol: "v1", updatedAt: now(), projects: projects.filter((item) => item?.worktree).map((item) => ({ id: item.id || null, worktree: resolve3(item.worktree), vcs: item.vcs || null })), sessions: records };
+  const index = { schemaVersion: 1, protocol: "v1", updatedAt: now(), projects: projects.filter((item) => item?.worktree).map((item) => ({ id: item.id || null, worktree: resolve4(item.worktree), vcs: item.vcs || null })), sessions: records };
   await writeJson(INDEX_FILE, index);
   const report = await writeReports3(index, settings, errors);
-  await appendFile4(ACTIONS_FILE, `${JSON.stringify({ at: now(), action: "audit", mode: "full-dry-run", counts: report.counts, errors: errors.length })}
+  await appendFile6(ACTIONS_FILE, `${JSON.stringify({ at: now(), action: "audit", mode: "full-dry-run", counts: report.counts, errors: errors.length })}
 `, "utf8");
   return { ...report.counts, usage: await upsertUsage(usageRecords), errors, paths };
 }
@@ -806,8 +995,8 @@ ${groupsText}
 import { tool as defineTool } from "@opencode-ai/plugin";
 
 // src/actions.js
-import { appendFile as appendFile5 } from "node:fs/promises";
-import { join as join2, relative as relative2, resolve as resolve4 } from "node:path";
+import { appendFile as appendFile7 } from "node:fs/promises";
+import { join as join3, relative as relative2, resolve as resolve5 } from "node:path";
 function now2() {
   return (/* @__PURE__ */ new Date()).toISOString();
 }
@@ -816,15 +1005,15 @@ async function saveOverride(args) {
   if (args.confirm !== true) return { applied: false, reason: "Explicit confirm=true is required; no settings changed." };
   if (!args.sessionId) return { applied: false, reason: "sessionId is required; no settings changed." };
   const settings = await loadSettings();
-  const backup = join2(BACKUPS, `override-${Date.now()}.json`);
+  const backup = join3(BACKUPS, `override-${Date.now()}.json`);
   await writeJson(backup, { type: "settings-backup", settings, createdAt: now2() });
   settings.manualOverrides[args.sessionId] = { ...settings.manualOverrides[args.sessionId] || {}, ...args.title ? { title: sanitize(args.title, 96) } : {}, ...args.topic ? { topic: sanitize(args.topic, 40) } : {}, ...args.archiveSuggestion ? { archiveSuggestion: sanitize(args.archiveSuggestion, 80) } : {} };
   await writeJson(SETTINGS_FILE, settings);
   return { applied: true, sessionId: args.sessionId, backup, paths };
 }
 function isInside(directory, file) {
-  const base = resolve4(directory);
-  const candidate = resolve4(file);
+  const base = resolve5(directory);
+  const candidate = resolve5(file);
   const value = relative2(base, candidate);
   return value === "" || !value.startsWith("..") && !value.includes(":");
 }
@@ -846,14 +1035,14 @@ async function applyRenames(client, currentDirectory, args, writeReports3) {
       results.push({ id: record.id, result: "skipped", reason: "title unchanged" });
       continue;
     }
-    const backup = join2(BACKUPS, `${Date.now()}-${record.id}.json`);
+    const backup = join3(BACKUPS, `${Date.now()}-${record.id}.json`);
     await writeJson(backup, { type: "session-organizer-backup", before: record, proposedTitle: record.proposedTitle, createdAt: now2() });
     try {
       const updated = responseData(await client.session.update({ path: { id: record.id }, query: { directory: record.directory || currentDirectory }, body: { title: record.proposedTitle } }));
       record.currentTitle = sanitize(updated?.title || record.proposedTitle, 160);
       record.manualTitlePreservation = false;
       results.push({ id: record.id, result: "renamed", title: record.currentTitle, backup });
-      await appendFile5(ACTIONS_FILE, `${JSON.stringify({ at: now2(), action: "rename", id: record.id, backup })}
+      await appendFile7(ACTIONS_FILE, `${JSON.stringify({ at: now2(), action: "rename", id: record.id, backup })}
 `, "utf8");
     } catch (error) {
       results.push({ id: record.id, result: "failed", error: safeError(error), backup });
@@ -872,7 +1061,7 @@ async function undoRenames(client, currentDirectory, args, writeReports3) {
   const index = await loadIndex();
   const results = [];
   for (const file of files) {
-    const resolved = resolve4(file);
+    const resolved = resolve5(file);
     if (!isInside(BACKUPS, resolved)) {
       results.push({ file, result: "refused", reason: "backup is outside the organizer backup directory" });
       continue;
@@ -890,7 +1079,7 @@ async function undoRenames(client, currentDirectory, args, writeReports3) {
         index.sessions[before.id].proposedTitle = before.currentTitle;
       }
       results.push({ file, id: before.id, result: "restored", title: before.currentTitle });
-      await appendFile5(ACTIONS_FILE, `${JSON.stringify({ at: now2(), action: "undo-rename", id: before.id, backup: file })}
+      await appendFile7(ACTIONS_FILE, `${JSON.stringify({ at: now2(), action: "undo-rename", id: before.id, backup: file })}
 `, "utf8");
     } catch (error) {
       results.push({ file, id: before.id, result: "failed", error: safeError(error) });
@@ -958,6 +1147,14 @@ function createTools({ client, directory, enqueue, writeReports: writeReports3, 
   };
 }
 
+// src/ui/control-center.js
+function enhanceDashboard(page) {
+  const panels = `<section class="control-center" aria-label="\u0426\u0435\u043D\u0442\u0440 \u0443\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u044F"><div class="cc-header"><div><div class="eyebrow">CONTROL CENTER</div><h2>\u0420\u0430\u0441\u0445\u043E\u0434\u044B, \u043C\u043E\u0434\u0435\u043B\u0438 \u0438 \u0441\u043E\u0441\u0442\u043E\u044F\u043D\u0438\u0435</h2></div><button id="cc-refresh" type="button">\u041E\u0431\u043D\u043E\u0432\u0438\u0442\u044C \u0434\u0430\u043D\u043D\u044B\u0435</button></div><div class="cc-grid"><article class="cc-card"><span>\u0420\u0430\u0441\u0445\u043E\u0434 \u0441\u0435\u0433\u043E\u0434\u043D\u044F</span><strong id="cc-cost">\u041D/\u0414</strong><small id="cc-cost-meta">\u0417\u0430\u0433\u0440\u0443\u0437\u043A\u0430...</small></article><article class="cc-card"><span>\u0422\u043E\u043A\u0435\u043D\u044B \u0441\u0435\u0433\u043E\u0434\u043D\u044F</span><strong id="cc-tokens">\u041D/\u0414</strong><small id="cc-token-meta">\u041B\u043E\u043A\u0430\u043B\u044C\u043D\u044B\u0439 ledger</small></article><article class="cc-card"><span>\u0414\u043D\u0435\u0432\u043D\u043E\u0439 \u0431\u044E\u0434\u0436\u0435\u0442</span><strong id="cc-budget">\u041D\u0435 \u0437\u0430\u0434\u0430\u043D</strong><small id="cc-budget-meta">\u041B\u043E\u043A\u0430\u043B\u044C\u043D\u044B\u0439 \u043F\u043E\u0440\u043E\u0433</small></article><article class="cc-card"><span>\u041D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u0430\u044F \u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C</span><strong id="cc-unknown">\u041D/\u0414</strong><small>\u041D\u0435 \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044F \u0431\u0435\u0441\u043F\u043B\u0430\u0442\u043D\u043E\u0439</small></article></div><div class="cc-columns"><section class="cc-panel"><h3>\u041C\u043E\u0434\u0435\u043B\u0438</h3><div id="cc-models" class="cc-list">\u0417\u0430\u0433\u0440\u0443\u0437\u043A\u0430...</div></section><section class="cc-panel"><h3>\u041F\u043E\u0441\u043B\u0435\u0434\u043D\u0438\u0435 \u0441\u043E\u0431\u044B\u0442\u0438\u044F</h3><div id="cc-journal" class="cc-list">\u0417\u0430\u0433\u0440\u0443\u0437\u043A\u0430...</div></section></div></section>`;
+  const styles = `<style>.control-center{margin:0 0 18px;padding:18px;border:1px solid #263646;border-radius:16px;background:linear-gradient(145deg,#111d29,#0d151e)}.cc-header{display:flex;justify-content:space-between;align-items:center;gap:12px}.cc-header h2{margin:5px 0 0;font-size:20px;letter-spacing:-.04em}.cc-header button,.cc-panel button{background:#172f3b;color:#edf4fa;border:1px solid #31566a;border-radius:8px;padding:8px 11px;cursor:pointer}.cc-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:15px}.cc-card,.cc-panel{border:1px solid #263646;border-radius:11px;background:#0d1822;padding:12px}.cc-card span,.cc-card small{display:block;color:#91a2b3;font-size:11px}.cc-card strong{display:block;margin:5px 0;font-size:22px;color:#edf4fa}.cc-columns{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px}.cc-panel h3{margin:0 0 9px;color:#69d2a7;font-size:11px;letter-spacing:.12em;text-transform:uppercase}.cc-list{display:grid;gap:6px;color:#b9c8d0;font-size:12px}.cc-item{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid #1e2d3a}.cc-item:last-child{border-bottom:0}.cc-item strong{color:#edf4fa}.cc-switch{margin-top:16px;padding-top:14px;border-top:1px solid #263646}.cc-switch select{max-width:100%;background:#172330;color:#edf4fa;border:1px solid #314457;border-radius:8px;padding:8px}.cc-switch .cc-status{margin:8px 0;color:#91a2b3;font-size:12px}@media(max-width:720px){.cc-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.cc-columns{grid-template-columns:1fr}.cc-header{align-items:flex-start;flex-direction:column}.cc-header button{width:100%}}</style>`;
+  const script = `<script>(function(){const token=document.querySelector('meta[name="session-organizer-request-token"]')?.content||"";const esc=v=>String(v??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");let ccModels=[],ccReport=null,currentSession=null;const get=async url=>{const response=await fetch(url,{cache:"no-store"});return response.ok?response.json():null};const write=async(url,body)=>{const response=await fetch(url,{method:"POST",headers:{"content-type":"application/json","x-session-organizer-token":token},body:JSON.stringify(body)});return response.json()};function set(id,value){const node=document.getElementById(id);if(node)node.textContent=value}function renderModels(){const node=document.getElementById("cc-models");if(!node)return;node.innerHTML=ccModels.length?ccModels.slice(0,8).map(model=>"<div class=cc-item><span>"+esc(model.providerId+"/"+model.modelId)+"</span><strong>"+esc(model.limits.context?Math.round(model.limits.context/1000)+"k":"\u043D\u0435\u0442 \u043A\u043E\u043D\u0442\u0435\u043A\u0441\u0442\u0430")+"</strong></div>").join(""):"<span>\u041A\u0430\u0442\u0430\u043B\u043E\u0433 \u043D\u0435\u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D</span>"}function renderSwitch(){const detail=document.getElementById("detail");if(!detail||!currentSession||detail.querySelector(".cc-switch"))return;const select=ccModels.map(model=>"<option value=""+esc(model.providerId+"/"+model.modelId)+"">"+esc(model.displayName||model.modelId)+" ("+esc(model.providerId)+")</option>").join("");const panel=document.createElement("div");panel.className="cc-switch";panel.innerHTML="<h3>\u041C\u043E\u0434\u0435\u043B\u044C \u0447\u0430\u0442\u0430</h3><select id="cc-session-model">"+select+"</select> <button id="cc-apply-model" type="button">\u041F\u0440\u0438\u043C\u0435\u043D\u0438\u0442\u044C</button><div class=cc-status id="cc-switch-status">\u0421\u043C\u0435\u043D\u0430 \u0442\u0440\u0435\u0431\u0443\u0435\u0442 \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043D\u0438\u044F.</div>";detail.append(panel);document.getElementById("cc-apply-model")?.addEventListener("click",async()=>{const model=document.getElementById("cc-session-model")?.value;const item=(ccReport?.sessions||[]).find(session=>session.id===currentSession);const status=document.getElementById("cc-switch-status");if(!item||!model){if(status)status.textContent="\u041D\u0435\u0442 \u0434\u0430\u043D\u043D\u044B\u0445 \u0432\u044B\u0431\u0440\u0430\u043D\u043D\u043E\u0433\u043E \u0447\u0430\u0442\u0430 \u0438\u043B\u0438 \u043A\u0430\u0442\u0430\u043B\u043E\u0433\u0430.";return}const preview=await write("/api/actions/session-model/preview",{sessionId:currentSession,directory:item.directory,model});if(!preview.ok){if(status)status.textContent=preview.error?.message||"Preview \u043D\u0435 \u0432\u044B\u043F\u043E\u043B\u043D\u0435\u043D.";return}if(!window.confirm((preview.oldModel||"\u0442\u0435\u043A\u0443\u0449\u0430\u044F \u043C\u043E\u0434\u0435\u043B\u044C")+" \u2192 "+preview.newModel+". \u041F\u0440\u0438\u043C\u0435\u043D\u0438\u0442\u044C?")){if(status)status.textContent="\u041E\u0442\u043C\u0435\u043D\u0435\u043D\u043E \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u0435\u043C.";return}const result=await write("/api/actions/session-model/apply",{confirmationId:preview.confirmationId,payloadHash:preview.payloadHash});if(status)status.textContent=result.ok?"\u041C\u043E\u0434\u0435\u043B\u044C \u043F\u043E\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043D\u0430 \u043F\u043E\u0441\u043B\u0435 \u043F\u0435\u0440\u0435\u0447\u0438\u0442\u044B\u0432\u0430\u043D\u0438\u044F \u0441\u0435\u0441\u0441\u0438\u0438.":(result.fallback?.command||result.error?.message||"\u0421\u043C\u0435\u043D\u0430 \u043D\u0435 \u043F\u0440\u0438\u043C\u0435\u043D\u0435\u043D\u0430.")})}async function loadCC(){const [dashboard,models,journal,report]=await Promise.all([get("/api/dashboard"),get("/api/models"),get("/api/journal?limit=6"),get("/api/report")]);ccModels=models?.data?.models||[];ccReport=report;const usage=dashboard?.data?.usage||{};set("cc-cost",typeof usage.cost==="number"?"$"+usage.cost.toFixed(4):"\u041D/\u0414");set("cc-tokens",typeof usage.total==="number"?usage.total.toLocaleString("ru-RU"):"\u041D/\u0414");const daily=(dashboard?.data?.budgets||[]).find(item=>item.period==="daily");set("cc-budget",daily?.limit===null||daily?.limit===undefined?"\u041D\u0435 \u0437\u0430\u0434\u0430\u043D":"$"+daily.amount.toFixed(4)+" / $"+daily.limit.toFixed(2));set("cc-budget-meta",daily?.ratio===null?"\u041B\u043E\u043A\u0430\u043B\u044C\u043D\u044B\u0439 \u043F\u043E\u0440\u043E\u0433 \u043D\u0435 \u0437\u0430\u0434\u0430\u043D":Math.round(daily.ratio*100)+"% \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043D\u043E");set("cc-unknown",usage.costUnknown??"\u041D/\u0414");const journalNode=document.getElementById("cc-journal");if(journalNode)journalNode.innerHTML=journal?.data?.items?.length?journal.data.items.map(item=>"<div class=cc-item><span>"+esc(item.action||"event")+"</span><strong>"+esc(item.at?new Date(item.at).toLocaleTimeString("ru-RU"):"-")+"</strong></div>").join(""):"<span>\u0421\u043E\u0431\u044B\u0442\u0438\u0439 \u043F\u043E\u043A\u0430 \u043D\u0435\u0442</span>";renderModels();renderSwitch()}document.getElementById("cc-refresh")?.addEventListener("click",loadCC);document.addEventListener("click",event=>{const row=event.target.closest("tr[data-id]");if(row){currentSession=row.dataset.id;setTimeout(renderSwitch,0)}});new MutationObserver(renderSwitch).observe(document.getElementById("detail")||document.body,{childList:true});loadCC().catch(()=>{});setInterval(loadCC,5000)})()</script>`;
+  return page.replace("</head>", `${styles}</head>`).replace('<section class="toolbar"', `${panels}<section class="toolbar"`).replace("</body>", `${script}</body>`);
+}
+
 // src/session-organizer.js
 function now3() {
   return (/* @__PURE__ */ new Date()).toISOString();
@@ -1017,7 +1214,7 @@ function renderRows(){const list=filtered();$("rows").innerHTML=list.length?list
 function show(id){const x=DATA.sessions.find(item=>item.id===id);if(!x)return;state.selected=id;const fav=marked("favorites",id),arch=marked("archived",id);$("detail").innerHTML="<h2>"+esc(x.currentTitle||"Без названия")+"</h2><p class=badge>"+esc(project(x))+" · "+esc(x.topic)+" · "+esc(status(x))+"</p><p>"+esc(x.shortSummary)+"</p><h3>Как открыть этот чат в OpenCode</h3><ol><li>Откройте терминал в проекте: <code>"+esc(x.directory||x.projectDirectory||"нет каталога")+"</code>.</li><li>Выполните команду для вашей системы.</li><li>Если OpenCode уже открыт, найдите проект и сравните ID чата.</li></ol><p class=muted>Windows</p><code class=command>"+esc(x.windowsCommand)+"</code><p><button id=copywin>Скопировать Windows-команду</button></p><p class=muted>macOS / Linux</p><code class=command>"+esc(x.unixCommand)+"</code><p><button id=copyunix>Скопировать Unix-команду</button></p><p class=muted>ID чата: "+esc(x.id)+"</p><div class=actions><button id=fav>"+(fav?"Убрать из избранного":"В избранное")+"</button><button id=arc>"+(arch?"Вернуть из архива":"В архив")+"</button></div><h3>Последние сообщения</h3>"+(x.previewMessages||[]).map(m=>"<div class=message><small>"+esc(m.role)+"</small><br>"+esc(m.text)+"</div>").join("");$("copywin").onclick=()=>navigator.clipboard&&navigator.clipboard.writeText(x.windowsCommand);$("copyunix").onclick=()=>navigator.clipboard&&navigator.clipboard.writeText(x.unixCommand);$("fav").onclick=()=>{state.favorites=fav?state.favorites.filter(v=>v!==id):[...state.favorites,id];save();render();show(id)};$("arc").onclick=()=>{state.archived=arch?state.archived.filter(v=>v!==id):[...state.archived,id];save();render();show(id)}}
 function render(){renderStats();renderProjects();renderRows()}["search","topic","status","project","scope"].forEach(id=>$(id).oninput=()=>{state[id==="search"?"query":id]=$(id).value;renderRows()});$("sort").onclick=()=>{state.sort=state.sort==="updated"?"title":state.sort==="title"?"project":"updated";$("sort").textContent=state.sort==="updated"?"Сначала новые":state.sort==="title"?"По названию":"По проекту";renderRows()};$("refresh").onclick=()=>location.reload();$("generated").textContent=date(new Date(DATA.generatedAt).getTime());[...new Set(DATA.sessions.map(x=>x.topic))].sort().forEach(v=>$("topic").insertAdjacentHTML("beforeend","<option>"+esc(v)+"</option>"));[...new Set(DATA.sessions.map(status))].sort().forEach(v=>$("status").insertAdjacentHTML("beforeend","<option>"+esc(v)+"</option>"));[...new Set(DATA.sessions.map(project))].sort((a,b)=>a.localeCompare(b,"ru")).forEach(v=>$("project").insertAdjacentHTML("beforeend","<option>"+esc(v)+"</option>"));render();setInterval(()=>fetch("/api/report",{cache:"no-store"}).then(r=>r.ok?r.json():null).then(x=>x&&x.generatedAt!==DATA.generatedAt&&location.reload()).catch(()=>{}),5000);
 </script></body></html>`;
-  await writeFile3(DASHBOARD_HTML, polishDashboard(htmlPage), "utf8");
+  await writeFile3(DASHBOARD_HTML, enhanceDashboard(polishDashboard(htmlPage)), "utf8");
 }
 async function writeReports2(index, settings, errors = []) {
   return writeReports(index, settings, errors, { writeDashboard, now: now3 });

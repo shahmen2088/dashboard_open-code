@@ -16,7 +16,7 @@ export const USAGE_INDEX = join(STORE, "usage-index.json")
 export const MODELS_FILE = join(STORE, "models.json")
 
 export const DEFAULT_SETTINGS = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   autoRename: false,
   autoMove: false,
   messagesLimit: 120,
@@ -29,6 +29,11 @@ export const DEFAULT_SETTINGS = {
   ignoredSessionIds: [],
   ignoredProjectDirectories: [],
   manualOverrides: {},
+  dashboard: { language: "ru", currency: "USD", refreshSeconds: 5 },
+  usage: { enabled: true, retentionDays: 365, timezone: "Europe/Moscow", pricingOverrides: {} },
+  budgets: { daily: null, weekly: null, monthly: null, warningThresholds: [0.7, 0.9, 1], hardStop: false },
+  modelSwitching: { enabled: true, allowDefaultConfigWrite: false, requireConfirmation: true },
+  security: { requireRequestToken: true },
 }
 
 export const paths = {
