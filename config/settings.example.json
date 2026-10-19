@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "autoRename": false,
+  "autoMove": false,
+  "messagesLimit": 120,
+  "maxExcerptChars": 420,
+  "maxStoredText": 1800,
+  "previewMessagesLimit": 20,
+  "previewMessageChars": 360,
+  "previewMaxChars": 6000,
+  "debounceMs": 1500,
+  "ignoredSessionIds": [],
+  "ignoredProjectDirectories": [],
+  "manualOverrides": {}
+}
