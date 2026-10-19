@@ -15,7 +15,14 @@ export function validWriteRequest(request, dashboardUrl) {
 }
 
 export function injectSecurityBootstrap(page) {
-  return page.replace("</head>", `<meta name="session-organizer-request-token" content="${requestToken}"></head>`)
+  const secured = page.replace(/<script(?=>)/g, `<script nonce="${requestToken}"`).replace(/<style(?=>)/g, `<style nonce="${requestToken}"`)
+  return secured.replace("</head>", `<meta name="session-organizer-request-token" content="${requestToken}"></head>`)
+}
+
+export function securityHeaders() {
+  return {
+    "content-security-policy": `default-src 'self'; script-src 'nonce-${requestToken}'; style-src 'nonce-${requestToken}'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`,
+  }
 }
 
 export async function readJsonBody(request, maxBytes = 64 * 1024) {

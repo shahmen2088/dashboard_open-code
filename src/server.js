@@ -7,9 +7,10 @@ import { loadUsageIndex, loadUsageRecords } from "./usage/ledger.js"
 import { loadModelCatalog } from "./models/catalog.js"
 import { applySessionModelChange, previewSessionModelChange } from "./models/switcher.js"
 import { applyDefaultModelChange, previewDefaultModelChange } from "./models/default.js"
-import { injectSecurityBootstrap, readJsonBody, validWriteRequest } from "./server/security.js"
+import { injectSecurityBootstrap, readJsonBody, securityHeaders, validWriteRequest } from "./server/security.js"
 import { budgetStatus } from "./usage/budgets.js"
 import { readJournal } from "./journal.js"
+import { unavailableQuota } from "./usage/quota.js"
 
 let dashboardServer = null
 
@@ -27,7 +28,7 @@ export async function startDashboardServer(client) {
   if (dashboardServer) return
   const server = createServer(async (request, response) => {
     const send = (status, type, body) => {
-      response.writeHead(status, { "content-type": type, "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" })
+      response.writeHead(status, { "content-type": type, "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", ...securityHeaders() })
       response.end(body)
     }
     const url = new URL(request.url || "/", "http://127.0.0.1")
@@ -68,7 +69,7 @@ export async function startDashboardServer(client) {
     if (url.pathname === "/api/dashboard") {
       const [index, settings, usageRecords] = await Promise.all([loadIndex(), loadSettings(), loadUsageRecords()])
       const records = [...usageRecords.values()]
-      send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: { activeChats: Object.values(index.sessions).filter((item) => item.status?.type !== "idle").length, sessions: Object.keys(index.sessions).length, budgets: budgetStatus(records, settings.budgets, settings.usage.timezone), usage: (await loadUsageIndex()).totals }, error: null, meta: { generatedAt: new Date().toISOString(), schemaVersion: 2 } }))
+      send(200, "application/json; charset=utf-8", JSON.stringify({ ok: true, data: { activeChats: Object.values(index.sessions).filter((item) => item.status?.type !== "idle").length, sessions: Object.keys(index.sessions).length, budgets: budgetStatus(records, settings.budgets, settings.usage.timezone), usage: (await loadUsageIndex()).totals, officialQuota: unavailableQuota() }, error: null, meta: { generatedAt: new Date().toISOString(), schemaVersion: 2 } }))
       return
     }
     if (url.pathname === "/api/models") {

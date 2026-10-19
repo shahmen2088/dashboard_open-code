@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { getRequestToken, injectSecurityBootstrap, validWriteRequest } from "../../src/server/security.js"
+import { getRequestToken, injectSecurityBootstrap, securityHeaders, validWriteRequest } from "../../src/server/security.js"
 
 test("write request security requires the in-memory token and same origin", () => {
   const token = getRequestToken()
@@ -8,4 +8,5 @@ test("write request security requires the in-memory token and same origin", () =
   assert.equal(validWriteRequest({ headers }, "http://127.0.0.1:1234/"), true)
   assert.equal(validWriteRequest({ headers: { ...headers, origin: "http://localhost:1234" } }, "http://127.0.0.1:1234/"), false)
   assert.match(injectSecurityBootstrap("<head></head>"), /session-organizer-request-token/)
+  assert.match(securityHeaders()["content-security-policy"], /script-src 'nonce-/)
 })

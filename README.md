@@ -1,4 +1,4 @@
-# OpenCode Session Organizer
+# OpenCode Session Organizer 0.2.0
 
 Reusable OpenCode V1 plugin that builds a local, read-only index and dashboard for the current user's sessions.
 
@@ -102,6 +102,8 @@ Read-only usage API:
 - `POST /api/actions/session-model/apply` - apply a matching, unexpired preview when the SDK supports it.
 
 Model changes are never reported as successful without reading the session back. If the current SDK has no supported switch operation, apply returns a safe copyable command instead. Write requests require the in-memory token bootstrapped into the local dashboard page and a same-origin JSON request.
+
+Official provider quota is reported as unavailable unless an explicit official provider adapter is added; local budgets are never presented as provider quotas.
 
 ## Development
 
