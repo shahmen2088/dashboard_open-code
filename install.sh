@@ -7,12 +7,15 @@ PLUGIN_DIR="$OPENCODE_DIR/plugins"
 STORE="${OPENCODE_SESSION_ORGANIZER_HOME:-$OPENCODE_DIR/session-organizer}"
 
 mkdir -p "$PLUGIN_DIR" "$STORE"
-cp "$REPO/src/session-organizer.js" "$PLUGIN_DIR/session-organizer.js"
+if command -v opencode >/dev/null 2>&1 && opencode --version 2>/dev/null | grep -q 'v2\.'; then
+  printf '%s\n' 'Detected OpenCode V2. The legacy V1 plugin was not copied; run npm run start:efficiency.'
+else
+  cp "$REPO"/src/*.js "$PLUGIN_DIR/"
+  printf 'Installed Session Organizer V1 plugin: %s\n' "$PLUGIN_DIR/session-organizer.js"
+fi
 
 if [ ! -f "$STORE/settings.json" ]; then
   cp "$REPO/config/settings.example.json" "$STORE/settings.json"
 fi
 
-printf 'Installed Session Organizer plugin: %s\n' "$PLUGIN_DIR/session-organizer.js"
 printf 'Local data directory: %s\n' "$STORE"
-printf '%s\n' 'Restart OpenCode, then run session_organizer_audit.'

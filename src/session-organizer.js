@@ -3,6 +3,7 @@ import { createServer } from "node:http"
 import { homedir } from "node:os"
 import { join, relative, resolve } from "node:path"
 import { tool as defineTool } from "@opencode-ai/plugin"
+import { createEfficiencyStore, efficiencyDashboardHtml } from "./efficiency-center.js"
 
 const STORE = resolve(process.env.OPENCODE_SESSION_ORGANIZER_HOME || join(homedir(), ".config", "opencode", "session-organizer"))
 const REPORTS = join(STORE, "reports")
@@ -14,6 +15,7 @@ const AUDIT_JSON = join(REPORTS, "audit-latest.json")
 const AUDIT_CSV = join(REPORTS, "audit-latest.csv")
 const SUMMARY_FILE = join(REPORTS, "summary.md")
 const DASHBOARD_HTML = join(REPORTS, "dashboard.html")
+const EFFICIENCY_DB = join(STORE, "efficiency.sqlite")
 
 const DEFAULT_SETTINGS = {
   schemaVersion: 1,
@@ -26,6 +28,9 @@ const DEFAULT_SETTINGS = {
   previewMessageChars: 360,
   previewMaxChars: 6000,
   debounceMs: 1500,
+  efficiencyEnabled: true,
+  codexImportEnabled: true,
+  efficiencySyncMs: 60000,
   ignoredSessionIds: [],
   ignoredProjectDirectories: [],
   manualOverrides: {},
@@ -55,12 +60,20 @@ const paths = {
   auditJson: AUDIT_JSON,
   auditCsv: AUDIT_CSV,
   dashboard: DASHBOARD_HTML,
+  efficiencyDatabase: EFFICIENCY_DB,
   dashboardUrl: null,
   summary: SUMMARY_FILE,
   backups: BACKUPS,
 }
 
 let dashboardServer = null
+let efficiencyStorePromise = null
+let efficiencySync = null
+
+async function getEfficiencyStore() {
+  efficiencyStorePromise ||= createEfficiencyStore({ storeDir: STORE, databaseFile: EFFICIENCY_DB })
+  return efficiencyStorePromise
+}
 
 function now() {
   return new Date().toISOString()
@@ -303,7 +316,7 @@ button{font:inherit;cursor:pointer;transition:background .18s ease,border-color 
 .stat{position:relative;overflow:hidden;padding:18px 19px;border:1px solid var(--line);border-radius:16px;background:linear-gradient(145deg,rgba(18,35,48,.95),rgba(11,24,34,.95));box-shadow:0 10px 28px rgba(0,0,0,.14)}
 .stat:after{content:"";position:absolute;right:-26px;bottom:-42px;width:90px;height:90px;border-radius:50%;background:rgba(101,224,178,.08)}.stat strong{position:relative;z-index:1;font-size:30px;letter-spacing:-.06em;color:var(--text)}.stat span{position:relative;z-index:1;margin-top:4px;color:var(--muted);font-size:11px;letter-spacing:.05em;text-transform:uppercase}
 .projectbar{gap:10px;margin:0 0 18px;padding:1px 1px 5px}.project-card{min-width:260px;padding:14px 16px;border:1px solid var(--line);border-radius:14px;background:rgba(13,25,35,.86);color:var(--text);box-shadow:0 10px 25px rgba(0,0,0,.12)}.project-card:hover,.project-card.active{border-color:var(--mint);background:linear-gradient(135deg,#163b37,#112b36);box-shadow:0 12px 30px rgba(23,108,91,.18);transform:translateY(-1px)}.project-card strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}.project-card span{display:block;margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:12px}
-.toolbar{gap:8px;padding:10px;border:1px solid var(--line);border-radius:16px;background:rgba(13,25,35,.9);box-shadow:0 12px 32px rgba(0,0,0,.14)}.toolbar input,.toolbar select,.toolbar button,.actions button{min-height:40px;border:1px solid #294458;border-radius:10px;background:var(--panel-raised);color:var(--text);padding:9px 12px}.toolbar input{box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}.toolbar input:focus,.toolbar select:focus{outline:2px solid rgba(101,224,178,.35);border-color:var(--mint)}.toolbar button:hover,.actions button:hover{border-color:var(--mint);background:#163b37;transform:translateY(-1px)}
+.toolbar{gap:8px;padding:10px;border:1px solid var(--line);border-radius:16px;background:rgba(13,25,35,.9);box-shadow:0 12px 32px rgba(0,0,0,.14)}.toolbar input,.toolbar select,.toolbar button,.actions button{min-height:40px;border:1px solid #294458;border-radius:10px;background:var(--panel-raised);color:var(--text);padding:9px 12px}.toolbar input{box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}.toolbar input:focus,.toolbar select:focus{outline:2px solid rgba(101,224,178,.35);border-color:var(--mint)}.toolbar button:hover,.actions button:hover{border-color:var(--mint);background:#163b37;transform:translateY(-1px)}.top-actions{display:flex;gap:8px;align-items:center}.top-actions a{color:var(--mint)}
 .layout{gap:18px}.table,.detail{border:1px solid var(--line);border-radius:18px;background:rgba(13,25,35,.94);box-shadow:var(--shadow)}.table{overflow:hidden}.table table{min-width:900px}.table th{padding:13px 15px;background:#0b1721;color:#71909f;font-size:10px;letter-spacing:.14em}.table td{padding:14px 15px;border-bottom:1px solid rgba(34,57,73,.75)}.table tbody tr[data-id]{transition:background .16s ease,box-shadow .16s ease}.table tbody tr[data-id]:hover{background:linear-gradient(90deg,rgba(28,72,67,.65),rgba(18,38,50,.4));box-shadow:inset 3px 0 var(--mint)}.table strong{font-size:13px;letter-spacing:-.015em}.table .muted{display:inline-block;max-width:360px;margin-top:4px;line-height:1.35}.badge{font-weight:700;color:var(--blue)}.detail{padding:24px;background:linear-gradient(160deg,rgba(17,38,51,.96),rgba(11,23,33,.96))}.detail h2{margin-top:0;font-size:24px;letter-spacing:-.04em}.detail h3{margin:24px 0 9px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mint)}.detail .command{border-color:#2b5362;background:#09151e;box-shadow:inset 0 1px rgba(255,255,255,.03)}.actions{margin-top:14px}.footer{padding:14px 2px;color:#7893a1;font-size:12px}.danger{color:var(--amber)}
 @media(max-width:980px){.layout{grid-template-columns:1fr}.detail{min-height:260px}.top{align-items:flex-start}.top button{flex:0 0 auto}}
 @media(max-width:620px){.shell{padding:16px 12px 36px}.top{display:block;padding:24px 20px;border-radius:19px}.top button{margin-top:20px;width:100%}.stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.stat{padding:14px}.stat strong{font-size:25px}.toolbar input,.toolbar select,.toolbar button{width:100%;flex-basis:100%}.project-card{min-width:calc(100vw - 48px)}.detail{padding:18px}}
@@ -348,7 +361,7 @@ async function writeDashboard(report) {
   }
   const htmlPage = String.raw`<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OpenCode Chats</title>
-<style>body{font:14px/1.45 system-ui,sans-serif;background:#0b1016;color:#edf4fa;margin:0}.shell{max-width:1500px;margin:auto;padding:28px 24px 48px}.top{display:flex;justify-content:space-between;gap:20px}.eyebrow{color:#69d2a7;font-size:12px;letter-spacing:.12em;font-weight:700}.muted{color:#91a2b3}.stats{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}.stat,.toolbar,.table,.detail,.project-card{background:#111923;border:1px solid #263646;border-radius:12px}.stat{padding:14px 18px}.stat strong,.stat span{display:block}.stat strong{font-size:24px}.stat span{color:#91a2b3;font-size:12px}.toolbar{display:flex;gap:8px;flex-wrap:wrap;padding:12px;margin-bottom:16px}.toolbar input,.toolbar select,.toolbar button,.actions button{background:#172330;color:#edf4fa;border:1px solid #314457;border-radius:8px;padding:9px}.toolbar input{flex:1 1 300px}.projectbar{display:flex;gap:8px;overflow:auto;margin-bottom:16px}.project-card{min-width:220px;padding:11px;text-align:left;color:#edf4fa;cursor:pointer}.project-card:hover,.project-card.active{border-color:#69d2a7;background:#163129}.project-card strong,.project-card span{display:block}.project-card span{color:#91a2b3;font-size:12px;margin-top:3px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:16px}.table{overflow:auto}table{border-collapse:collapse;width:100%;min-width:900px}th,td{text-align:left;padding:11px;border-bottom:1px solid #263646}th{color:#91a2b3;font-size:11px;text-transform:uppercase}tr[data-id]{cursor:pointer}tr[data-id]:hover,tr.selected{background:#18382f}.detail{padding:18px;min-height:420px}.badge{color:#7ab7ff}.message{padding:8px;border-left:2px solid #69d2a7;background:#0e171f;margin:7px 0}.command{display:block;white-space:pre-wrap;word-break:break-word;background:#0e171f;border:1px solid #263646;border-radius:8px;padding:10px;font:12px ui-monospace,monospace}.actions{display:flex;flex-wrap:wrap;gap:8px}.footer{color:#91a2b3;padding:12px}.danger{color:#f1bd72}ol{padding-left:22px}</style></head><body><main class="shell"><div class="top"><div><div class="eyebrow">PROJECTS → CHATS → OPENCODE</div><h1>OpenCode Chats</h1><p class="muted">Поиск по чатам и проектам. Данные остаются на этом компьютере.</p></div><button id="refresh">Обновить снимок</button></div><section class="stats" id="stats"></section><section class="projectbar" id="projects"></section><section class="toolbar"><input id="search" placeholder="Поиск по чатам, проектам, описанию или ID"><select id="topic"><option value="all">Все темы</option></select><select id="status"><option value="all">Все статусы</option></select><select id="project"><option value="all">Все проекты</option></select><select id="scope"><option value="all">Все чаты</option><option value="favorites">Избранные</option><option value="archived">Архив</option><option value="active">Без архива</option></select><button id="sort">Сначала новые</button></section><section class="layout"><div class="table"><table><thead><tr><th>Чат</th><th>Проект</th><th>Тема</th><th>Статус</th><th>Обновлён</th></tr></thead><tbody id="rows"></tbody></table><div class="footer" id="result"></div></div><aside class="detail" id="detail"><span class="muted">Выберите проект или чат.</span></aside></section><p class="footer">Снимок создан: <span id="generated"></span>. После нового аудита страница обновится автоматически.</p></main><script>
+<style>body{font:14px/1.45 system-ui,sans-serif;background:#0b1016;color:#edf4fa;margin:0}.shell{max-width:1500px;margin:auto;padding:28px 24px 48px}.top{display:flex;justify-content:space-between;gap:20px}.eyebrow{color:#69d2a7;font-size:12px;letter-spacing:.12em;font-weight:700}.muted{color:#91a2b3}.stats{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}.stat,.toolbar,.table,.detail,.project-card{background:#111923;border:1px solid #263646;border-radius:12px}.stat{padding:14px 18px}.stat strong,.stat span{display:block}.stat strong{font-size:24px}.stat span{color:#91a2b3;font-size:12px}.toolbar{display:flex;gap:8px;flex-wrap:wrap;padding:12px;margin-bottom:16px}.toolbar input,.toolbar select,.toolbar button,.actions button{background:#172330;color:#edf4fa;border:1px solid #314457;border-radius:8px;padding:9px}.toolbar input{flex:1 1 300px}.projectbar{display:flex;gap:8px;overflow:auto;margin-bottom:16px}.project-card{min-width:220px;padding:11px;text-align:left;color:#edf4fa;cursor:pointer}.project-card:hover,.project-card.active{border-color:#69d2a7;background:#163129}.project-card strong,.project-card span{display:block}.project-card span{color:#91a2b3;font-size:12px;margin-top:3px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:16px}.table{overflow:auto}table{border-collapse:collapse;width:100%;min-width:900px}th,td{text-align:left;padding:11px;border-bottom:1px solid #263646}th{color:#91a2b3;font-size:11px;text-transform:uppercase}tr[data-id]{cursor:pointer}tr[data-id]:hover,tr.selected{background:#18382f}.detail{padding:18px;min-height:420px}.badge{color:#7ab7ff}.message{padding:8px;border-left:2px solid #69d2a7;background:#0e171f;margin:7px 0}.command{display:block;white-space:pre-wrap;word-break:break-word;background:#0e171f;border:1px solid #263646;border-radius:8px;padding:10px;font:12px ui-monospace,monospace}.actions,.top-actions{display:flex;flex-wrap:wrap;gap:8px}.top-actions a{color:#69d2a7;padding:9px}.footer{color:#91a2b3;padding:12px}.danger{color:#f1bd72}ol{padding-left:22px}</style></head><body><main class="shell"><div class="top"><div><div class="eyebrow">PROJECTS → CHATS → OPENCODE</div><h1>OpenCode Chats</h1><p class="muted">Поиск по чатам и проектам. Данные остаются на этом компьютере.</p></div><div class="top-actions"><a href="/efficiency">AI Efficiency</a><button id="refresh">Обновить снимок</button></div></div><section class="stats" id="stats"></section><section class="projectbar" id="projects"></section><section class="toolbar"><input id="search" placeholder="Поиск по чатам, проектам, описанию или ID"><select id="topic"><option value="all">Все темы</option></select><select id="status"><option value="all">Все статусы</option></select><select id="project"><option value="all">Все проекты</option></select><select id="scope"><option value="all">Все чаты</option><option value="favorites">Избранные</option><option value="archived">Архив</option><option value="active">Без архива</option></select><button id="sort">Сначала новые</button></section><section class="layout"><div class="table"><table><thead><tr><th>Чат</th><th>Проект</th><th>Тема</th><th>Статус</th><th>Обновлён</th></tr></thead><tbody id="rows"></tbody></table><div class="footer" id="result"></div></div><aside class="detail" id="detail"><span class="muted">Выберите проект или чат.</span></aside></section><p class="footer">Снимок создан: <span id="generated"></span>. После нового аудита страница обновится автоматически.</p></main><script>
 const DATA=${scriptJson(data)};const state={query:"",topic:"all",status:"all",project:"all",scope:"all",sort:"updated",selected:null,favorites:JSON.parse(localStorage.getItem("opencode-session-organizer:favorites")||"[]"),archived:JSON.parse(localStorage.getItem("opencode-session-organizer:archived")||"[]")};const $=id=>document.getElementById(id);const esc=v=>String(v??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;");const status=x=>x.status&&x.status.type||"unknown";const project=x=>x.projectDirectory||"Без проекта";const marked=(key,id)=>state[key].includes(id);const save=()=>{localStorage.setItem("opencode-session-organizer:favorites",JSON.stringify(state.favorites));localStorage.setItem("opencode-session-organizer:archived",JSON.stringify(state.archived))};const date=v=>v?new Date(Number(v)).toLocaleString("ru-RU"):"нет данных";
 function filtered(){const q=state.query.toLowerCase();const list=DATA.sessions.filter(x=>(!q||[x.id,x.currentTitle,x.shortSummary,x.topic,x.projectDirectory,x.directory].join(" ").toLowerCase().includes(q))&&(state.topic==="all"||x.topic===state.topic)&&(state.status==="all"||status(x)===state.status)&&(state.project==="all"||project(x)===state.project)&&(state.scope==="all"||(state.scope==="favorites"&&marked("favorites",x.id))||(state.scope==="archived"&&marked("archived",x.id))||(state.scope==="active"&&!marked("archived",x.id))));return list.sort((a,b)=>state.sort==="title"?String(a.currentTitle||"").localeCompare(String(b.currentTitle||""),"ru"):state.sort==="project"?project(a).localeCompare(project(b),"ru"):(Number(b.time&&b.time.updated)||0)-(Number(a.time&&a.time.updated)||0))}
 function renderStats(){const c=DATA.counts;$("stats").innerHTML=[[c.sessions,"чатов"],[c.projects,"проектов"],[c.duplicateLinks,"связей дубликатов"],[state.favorites.length,"избранных"]].map(x=>"<div class=stat><strong>"+esc(x[0])+"</strong><span>"+esc(x[1])+"</span></div>").join("")}
@@ -388,6 +401,44 @@ async function startDashboardServer() {
   if (dashboardServer) return
   const server = createServer(async (request, response) => {
     const send = (status, type, body) => { response.writeHead(status, { "content-type": type, "cache-control": "no-store" }); response.end(body) }
+    const url = new URL(request.url || "/", "http://127.0.0.1")
+    if (url.pathname === "/efficiency" || url.pathname === "/efficiency/") {
+      send(200, "text/html; charset=utf-8", efficiencyDashboardHtml())
+      return
+    }
+    if (url.pathname.startsWith("/api/efficiency/")) {
+      try {
+        const store = await getEfficiencyStore()
+        const query = Object.fromEntries(url.searchParams)
+        let result
+        if (request.method === "GET" && url.pathname === "/api/efficiency/overview") result = store.getOverview(query)
+        else if (request.method === "GET" && url.pathname === "/api/efficiency/models") result = store.getModels(query)
+        else if (request.method === "GET" && url.pathname === "/api/efficiency/sessions") result = store.getSessions(query)
+        else if (request.method === "GET" && /^\/api\/efficiency\/sessions\/\d+$/.test(url.pathname)) result = store.getSession(Number(url.pathname.split("/").at(-1)))
+        else if (request.method === "GET" && url.pathname === "/api/efficiency/projects") result = store.getProjects()
+        else if (request.method === "GET" && url.pathname === "/api/efficiency/health") result = store.getHealth()
+        else if (request.method === "GET" && url.pathname === "/api/efficiency/benchmarks") result = store.getBenchmarks()
+        else if (request.method === "GET" && url.pathname === "/api/efficiency/experiments") result = store.getExperiments()
+        else if (request.method === "GET" && url.pathname === "/api/efficiency/budgets") result = store.getBudgets()
+        else if (request.method === "POST" && url.pathname === "/api/efficiency/sync") {
+          const expected = process.env.OPENCODE_EFFICIENCY_API_TOKEN
+          const provided = String(request.headers.authorization || "").replace(/^Bearer\s+/i, "")
+          if (!expected || provided !== expected) { send(403, "application/json; charset=utf-8", JSON.stringify({ error: "Protected operation. Configure OPENCODE_EFFICIENCY_API_TOKEN and send it as a Bearer token." })); return }
+          result = efficiencySync ? await efficiencySync() : { status: "unavailable" }
+        } else if (request.method === "GET" && url.pathname === "/api/efficiency/events") {
+          response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" })
+          response.write(`event: ready\ndata: ${JSON.stringify({ at: now() })}\n\n`)
+          const heartbeat = setInterval(() => response.write(`: heartbeat ${Date.now()}\n\n`), 25000)
+          request.on("close", () => clearInterval(heartbeat))
+          return
+        } else { send(404, "application/json; charset=utf-8", JSON.stringify({ error: "Unknown efficiency endpoint" })); return }
+        if (result === null) { send(404, "application/json; charset=utf-8", JSON.stringify({ error: "Not found" })); return }
+        send(200, "application/json; charset=utf-8", JSON.stringify(result))
+      } catch (error) {
+        send(500, "application/json; charset=utf-8", JSON.stringify({ error: safeError(error) }))
+      }
+      return
+    }
     if (request.url === "/api/report") {
       try { send(200, "application/json; charset=utf-8", await readFile(AUDIT_JSON, "utf8")) } catch { send(404, "application/json; charset=utf-8", JSON.stringify({ error: "Audit has not been generated yet" })) }
       return
@@ -428,13 +479,25 @@ async function runAudit(client, currentDirectory) {
     if (result && typeof result === "object") Object.assign(statuses, result)
   }
   const records = {}
+  const telemetrySessions = []
   for (const session of sessions) {
     const messages = await call(`client.session.messages:${session.id}`, () => client.session.messages({ path: { id: session.id }, query: { directory: session.directory, limit: settings.messagesLimit } }), errors)
-    records[session.id] = await buildRecord(session, Array.isArray(messages) ? messages : [], statuses, projects, previous.sessions, settings)
+    const safeMessages = Array.isArray(messages) ? messages : []
+    records[session.id] = await buildRecord(session, safeMessages, statuses, projects, previous.sessions, settings)
+    telemetrySessions.push({ session, messages: safeMessages, status: statuses[session.id] || { type: "unknown" } })
   }
   updateDuplicates(records)
   const index = { schemaVersion: 1, protocol: "v1", updatedAt: now(), projects: projects.filter((item) => item?.worktree).map((item) => ({ id: item.id || null, worktree: resolve(item.worktree), vcs: item.vcs || null })), sessions: records }
   await writeJson(INDEX_FILE, index)
+  if (settings.efficiencyEnabled) {
+    try {
+      const efficiency = await getEfficiencyStore()
+      for (const telemetry of telemetrySessions) efficiency.importOpenCodeSession(telemetry)
+      if (settings.codexImportEnabled) await efficiency.importCodexHome(join(homedir(), ".codex"))
+    } catch (error) {
+      errors.push({ operation: "efficiency.sync", error: safeError(error) })
+    }
+  }
   const report = await writeReports(index, settings, errors)
   await appendFile(ACTIONS_FILE, `${JSON.stringify({ at: now(), action: "audit", mode: "full-dry-run", counts: report.counts, errors: errors.length })}\n`, "utf8")
   return { ...report.counts, errors, paths }
@@ -545,6 +608,7 @@ export const SessionOrganizer = async ({ client, directory }) => {
   await startDashboardServer()
   let operation = Promise.resolve()
   const enqueue = (work) => { operation = operation.then(work, work); return operation }
+  efficiencySync = () => enqueue(() => runAudit(client, directory))
   void enqueue(() => runAudit(client, directory)).catch(() => undefined)
   let refreshTimer = null
   const scheduleRefresh = async () => {
@@ -552,6 +616,9 @@ export const SessionOrganizer = async ({ client, directory }) => {
     const settings = await loadSettings()
     refreshTimer = setTimeout(() => { refreshTimer = null; void enqueue(() => runAudit(client, directory)).catch(() => undefined) }, Number(settings.debounceMs) || 1500)
   }
+  const initialSettings = await loadSettings()
+  const syncTimer = setInterval(() => { void efficiencySync().catch(() => undefined) }, Math.max(15000, Number(initialSettings.efficiencySyncMs) || 60000))
+  syncTimer.unref?.()
 
   const tool = {
     session_organizer_audit: defineTool({
@@ -562,12 +629,17 @@ export const SessionOrganizer = async ({ client, directory }) => {
     session_organizer_status: defineTool({
       description: "Show local Session Organizer paths, settings, and indexed session count.",
       args: {},
-      async execute() { const index = await loadIndex(); const settings = await loadSettings(); const result = { updatedAt: index.updatedAt, sessions: Object.keys(index.sessions).length, settings, paths }; return { title: "Session Organizer status", output: JSON.stringify(result, null, 2), metadata: result } },
+      async execute() { const index = await loadIndex(); const settings = await loadSettings(); const efficiency = settings.efficiencyEnabled ? (await getEfficiencyStore()).getHealth() : []; const result = { updatedAt: index.updatedAt, sessions: Object.keys(index.sessions).length, settings, efficiency, paths: { ...paths, efficiencyUrl: paths.dashboardUrl ? `${paths.dashboardUrl}efficiency` : null } }; return { title: "Session Organizer status", output: JSON.stringify(result, null, 2), metadata: result } },
     }),
     session_organizer_diagnose: defineTool({
       description: "Check OpenCode V1 connectivity, local storage, and dashboard availability.",
       args: {},
       async execute() { const result = await enqueue(() => diagnose(client)); return { title: "Session Organizer diagnostics", output: JSON.stringify(result, null, 2), metadata: result } },
+    }),
+    session_organizer_efficiency_backup: defineTool({
+      description: "Create a consistent local backup of the AI Efficiency SQLite database in the organizer backup directory.",
+      args: {},
+      async execute() { const file = join(BACKUPS, `efficiency-${Date.now()}.sqlite`); const backup = (await getEfficiencyStore()).backup(file); const result = { created: true, backup }; return { title: "AI Efficiency backup", output: JSON.stringify(result, null, 2), metadata: result } },
     }),
     session_organizer_override: defineTool({
       description: "Save an explicit local title, topic, or archive override. Requires confirm=true and never changes the source session.",

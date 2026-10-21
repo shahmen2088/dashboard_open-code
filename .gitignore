@@ -9,3 +9,6 @@ reports/
 backups/
 index.json
 settings.json
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

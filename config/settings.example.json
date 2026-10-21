@@ -9,6 +9,9 @@
   "previewMessageChars": 360,
   "previewMaxChars": 6000,
   "debounceMs": 1500,
+  "efficiencyEnabled": true,
+  "codexImportEnabled": true,
+  "efficiencySyncMs": 60000,
   "ignoredSessionIds": [],
   "ignoredProjectDirectories": [],
   "manualOverrides": {}

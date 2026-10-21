@@ -10,10 +10,13 @@
     "install.ps1",
     "install.sh",
     "README.md",
+    "docs/",
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check src/session-organizer.js"
+    "check": "node --check src/session-organizer.js && node --check src/efficiency-center.js && node --check src/efficiency-migrations.js && node --check src/efficiency-standalone.js",
+    "test": "node --test tests/*.test.js",
+    "start:efficiency": "node src/efficiency-standalone.js"
   },
   "engines": {
     "node": ">=18"
