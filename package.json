@@ -11,10 +11,11 @@
     "install.sh",
     "README.md",
     "docs/",
+    "integrations/",
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check src/session-organizer.js && node --check src/efficiency-center.js && node --check src/efficiency-migrations.js && node --check src/efficiency-standalone.js",
+    "check": "node --check src/session-organizer.js && node --check src/efficiency-center.js && node --check src/efficiency-migrations.js && node --check src/efficiency-standalone.js && node --check src/skill-telemetry.js && node --check src/project-registry.js && node --check integrations/opencode-v2/ai-analytics.js && node --check integrations/codex/skill-event-hook.mjs",
     "test": "node --test tests/*.test.js",
     "start:efficiency": "node src/efficiency-standalone.js"
   },

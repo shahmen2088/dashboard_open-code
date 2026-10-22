@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "projects": [
+    {
+      "id": "example-project",
+      "name": "Example project",
+      "directory": "C:\\path\\to\\project"
+    }
+  ]
+}

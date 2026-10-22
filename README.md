@@ -15,6 +15,7 @@ The project now includes **AI Efficiency Control Center v0.1**: a local SQLite t
 - Never renames sessions automatically. Any rename workflow must be implemented as an explicit confirmed action.
 - Imports OpenCode V2 session telemetry through `opencode api` and `opencode stats`, OpenCode V1 assistant usage through the legacy plugin, and available Codex JSONL token records without storing prompt or response bodies in the efficiency database.
 - Deduplicates every model call, preserves unknown financial values as unknown, and keeps actual, reported, and API-equivalent cost separate.
+- Inventories global and project skills without storing instruction bodies or clear-text installation paths, and records only evidence-backed skill events.
 
 The project is designed so every user has an independent store. No machine-specific paths, session snapshots, logs, or secrets belong in this repository.
 
@@ -54,7 +55,21 @@ The standalone server imports the running OpenCode V2 service and local Codex hi
 npm run start:efficiency
 ```
 
+For a scope limited to explicit local projects, copy `config/project-registry.example.json` to the ignored `config/project-registry.json`, list the project directories, and run:
+
+```powershell
+& .\start-local.ps1
+```
+
+This keeps the SQLite data in `.local/session-organizer` and ignores sessions outside the registry. It is the recommended mode when one control center serves several repositories.
+
 Open `http://127.0.0.1:4177/efficiency`. Set `OPENCODE_EFFICIENCY_PORT` to choose another port. The server binds only to `127.0.0.1`.
+
+Use **Обновить аналитику** for an asynchronous, idempotent import. The page shows
+source health and leaves incomplete skill coverage as **Нет данных** instead of
+treating missing events as zero usage. Optional low-latency Codex and OpenCode
+adapters are documented in [`integrations/README.md`](integrations/README.md);
+they are intentionally not installed into global product configuration.
 
 The dashboard searches chat title, chat description, project path, and chat ID. Select a project first when working with a large workspace. Each chat detail panel shows a Windows command and a macOS/Linux command in the form `opencode -s <chat-id>`, plus the exact project directory and step-by-step instructions for opening the chat.
 
@@ -108,6 +123,15 @@ Efficiency settings:
 
 Read-only endpoints:
 
+- `GET /api/analytics/overview`
+- `GET /api/analytics/skills`
+- `GET /api/analytics/skills/:id`
+- `GET /api/analytics/models`
+- `GET /api/analytics/agents`
+- `GET /api/analytics/sessions`
+- `GET /api/analytics/sources`
+- `GET /api/analytics/refresh/:id`
+- `GET /api/analytics/export?entity=skills|events&format=json|csv`
 - `GET /api/efficiency/overview`
 - `GET /api/efficiency/models`
 - `GET /api/efficiency/sessions`
@@ -120,6 +144,12 @@ Read-only endpoints:
 - `GET /api/efficiency/events` (integrated OpenCode server)
 
 Optional filters for overview, model, and session queries are `from`, `to`, `project`, `model`, and `provider`.
+
+`POST /api/analytics/refresh` starts a background refresh and rejects a second
+conflicting refresh. `POST /api/analytics/events` accepts normalized direct-hook
+events only when `OPENCODE_EFFICIENCY_API_TOKEN` is configured and supplied as a
+bearer token. Browser refresh requests also require the local custom action
+header used by the bundled page.
 
 Current Sprint 1 boundary: Codex does not expose confirmed per-call spend in local JSONL, and no price table is guessed. OpenCode reported cost is imported as reported by the source. Therefore Actual Spend, API-equivalent cost, verified-success cost, and savings remain visibly unknown until authoritative billing, prices, and task evidence are connected in later sprints.
 

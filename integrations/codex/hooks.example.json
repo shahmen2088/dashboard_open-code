@@ -1,0 +1,18 @@
+{
+  "description": "Optional local AI Analytics evidence hook",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /absolute/path/to/dashboard_open-code/integrations/codex/skill-event-hook.mjs",
+            "commandWindows": "node C:\\absolute\\path\\to\\dashboard_open-code\\integrations\\codex\\skill-event-hook.mjs",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}

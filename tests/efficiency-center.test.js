@@ -6,9 +6,11 @@ import test from "node:test"
 
 import {
   createEfficiencyStore,
+  efficiencyDashboardHtml,
   normalizeCodexUsage,
   normalizeOpenCodeMessage,
 } from "../src/efficiency-center.js"
+import { directoryIsWithinRoot } from "../src/project-registry.js"
 
 test("OpenCode accounting keeps cache and reasoning separate without losing total", () => {
   const call = normalizeOpenCodeMessage({
@@ -50,6 +52,18 @@ test("Codex accounting treats cached input and reasoning as subsets", () => {
   assert.equal(call.cachedInputTokens, 60)
   assert.equal(call.reasoningTokens, 7)
   assert.equal(call.totalTokens, 120)
+})
+
+test("project scope respects directory boundaries", () => {
+  assert.equal(directoryIsWithinRoot("C:/work/project/app", "C:/work/project"), true)
+  assert.equal(directoryIsWithinRoot("C:/work/project-copy", "C:/work/project"), false)
+})
+
+test("generated AI Analytics browser script parses before it is served", () => {
+  const html = efficiencyDashboardHtml()
+  const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1]
+  assert.ok(script, "dashboard must contain an inline browser script")
+  assert.doesNotThrow(() => new Function(script))
 })
 
 test("re-import is idempotent and aggregates remain stable", async () => {
@@ -106,6 +120,26 @@ test("Codex JSONL import stores only telemetry and survives duplicate sync", asy
     assert.equal(health.status, "partial")
     assert.equal(health.coverage, null)
     assert.equal(JSON.stringify(detail).includes("must not be stored"), false)
+  } finally {
+    store?.close()
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+  }
+})
+
+test("Codex import skips sessions outside an explicit project scope", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "efficiency-scope-test-"))
+  let store
+  try {
+    const allowed = join(directory, "allowed")
+    const file = join(directory, "session.jsonl")
+    await writeFile(file, [
+      JSON.stringify({ type: "session_meta", payload: { id: "outside", cwd: join(directory, "outside") } }),
+      JSON.stringify({ type: "token_usage_record", payload: { response_id: "r-outside", session_id: "outside", usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } } }),
+    ].join("\n"), "utf8")
+    store = await createEfficiencyStore({ storeDir: directory, allowedProjectDirectories: [allowed] })
+    const result = await store.importCodexFiles([file])
+    assert.equal(result.skipped, 1)
+    assert.equal(store.getOverview({}).calls, 0)
   } finally {
     store?.close()
     await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })

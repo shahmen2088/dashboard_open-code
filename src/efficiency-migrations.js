@@ -195,4 +195,69 @@ export const EFFICIENCY_MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at);
     `,
   },
+  {
+    version: 2,
+    name: "skill-analytics",
+    sql: `
+      CREATE TABLE IF NOT EXISTS skills (
+        id INTEGER PRIMARY KEY,
+        skill_key TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        description TEXT,
+        source_repository TEXT,
+        version TEXT,
+        status TEXT NOT NULL DEFAULT 'unknown',
+        last_discovered_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS skill_installations (
+        id INTEGER PRIMARY KEY,
+        skill_id INTEGER NOT NULL REFERENCES skills(id),
+        platform TEXT NOT NULL,
+        installation_scope TEXT NOT NULL,
+        path_hash TEXT NOT NULL,
+        version TEXT,
+        status TEXT NOT NULL,
+        discovered_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        UNIQUE(skill_id, platform, installation_scope, path_hash)
+      );
+      CREATE TABLE IF NOT EXISTS skill_events (
+        id INTEGER PRIMARY KEY,
+        source_id INTEGER NOT NULL REFERENCES sources(id),
+        project_id INTEGER REFERENCES projects(id),
+        session_id INTEGER REFERENCES sessions(id),
+        event_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        occurred_at TEXT,
+        platform TEXT NOT NULL,
+        run_id TEXT,
+        turn_id TEXT,
+        agent_id TEXT,
+        model_id INTEGER REFERENCES models(id),
+        skill_id INTEGER NOT NULL REFERENCES skills(id),
+        skill_version TEXT,
+        invocation_type TEXT,
+        status TEXT,
+        evidence_source TEXT NOT NULL,
+        UNIQUE(source_id, event_id)
+      );
+      CREATE TABLE IF NOT EXISTS analytics_refreshes (
+        id INTEGER PRIMARY KEY,
+        external_id TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        processed_events INTEGER NOT NULL DEFAULT 0,
+        duplicate_events INTEGER NOT NULL DEFAULT 0,
+        warning TEXT,
+        error TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_skill_events_time ON skill_events(occurred_at);
+      CREATE INDEX IF NOT EXISTS idx_skill_events_skill ON skill_events(skill_id);
+      CREATE INDEX IF NOT EXISTS idx_skill_events_session ON skill_events(session_id);
+      CREATE INDEX IF NOT EXISTS idx_skill_events_project ON skill_events(project_id);
+      CREATE INDEX IF NOT EXISTS idx_skill_events_type ON skill_events(event_type);
+      CREATE INDEX IF NOT EXISTS idx_skill_installations_platform ON skill_installations(platform);
+    `,
+  },
 ]
